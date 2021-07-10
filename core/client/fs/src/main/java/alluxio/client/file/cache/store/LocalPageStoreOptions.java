@@ -11,26 +11,16 @@
 
 package alluxio.client.file.cache.store;
 
-import alluxio.Constants;
-
 import com.google.common.base.MoreObjects;
 
 /**
  * Options used to instantiate the {@link LocalPageStore}.
  */
 public class LocalPageStoreOptions extends PageStoreOptions {
-
-  /**
-   * The max number of buffers used to transfer data. Total memory usage will be equivalent to
-   * {@link #mBufferPoolSize} * {@link #mBufferSize}
-   */
-  private int mBufferPoolSize;
-
-  /**
-   * The size of the buffers used to transfer data. It is recommended to set this at or near the
-   * expected max page size.
-   */
-  private int mBufferSize;
+  // We assume there will be some overhead using local fs as a page store,
+  // i.e., with 1GB space allocated, we
+  // expect no more than 1024MB / (1 + LOCAL_OVERHEAD_RATIO) logical data stored
+  private static final double LOCAL_OVERHEAD_RATIO = 0.05;
 
   /**
    * The number of file buckets. It is recommended to set this to a high value if the number of
@@ -42,41 +32,8 @@ public class LocalPageStoreOptions extends PageStoreOptions {
    * Creates a new instance of {@link LocalPageStoreOptions}.
    */
   public LocalPageStoreOptions() {
-    mBufferPoolSize = 32;
-    mBufferSize = Constants.MB;
     mFileBuckets = 1000;
-  }
-
-  /**
-   * @param bufferPoolSize sets the buffer pool size
-   * @return the updated options
-   */
-  public LocalPageStoreOptions setBufferPoolSize(int bufferPoolSize) {
-    mBufferPoolSize = bufferPoolSize;
-    return this;
-  }
-
-  /**
-   * @return the size of the buffer pool
-   */
-  public int getBufferPoolSize() {
-    return mBufferPoolSize;
-  }
-
-  /**
-   * @param bufferSize the number of buffers in the buffer pool
-   * @return the updated options
-   */
-  public LocalPageStoreOptions setBufferSize(int bufferSize) {
-    mBufferSize = bufferSize;
-    return this;
-  }
-
-  /**
-   * @return the number of items
-   */
-  public int getBufferSize() {
-    return mBufferSize;
+    mOverheadRatio = LocalPageStoreOptions.LOCAL_OVERHEAD_RATIO;
   }
 
   /**
@@ -104,12 +61,13 @@ public class LocalPageStoreOptions extends PageStoreOptions {
   public String toString() {
     return MoreObjects.toStringHelper(this)
         .add("AlluxioVersion", mAlluxioVersion)
-        .add("BufferPoolSize", mBufferPoolSize)
         .add("CacheSize", mCacheSize)
-        .add("BufferSize", mBufferSize)
         .add("FileBuckets", mFileBuckets)
+        .add("OverheadRatio", mOverheadRatio)
         .add("PageSize", mPageSize)
         .add("RootDir", mRootDir)
+        .add("TimeoutDuration", mTimeoutDuration)
+        .add("TimeoutThreads", mTimeoutThreads)
         .toString();
   }
 }

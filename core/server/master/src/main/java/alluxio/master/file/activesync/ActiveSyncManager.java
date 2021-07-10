@@ -23,6 +23,7 @@ import alluxio.heartbeat.HeartbeatThread;
 import alluxio.master.file.FileSystemMaster;
 import alluxio.master.file.RpcContext;
 import alluxio.master.file.meta.MountTable;
+import alluxio.master.file.meta.options.MountInfo;
 import alluxio.master.journal.checkpoint.CheckpointName;
 import alluxio.master.journal.JournalContext;
 import alluxio.master.journal.Journaled;
@@ -31,12 +32,14 @@ import alluxio.proto.journal.File.AddSyncPointEntry;
 import alluxio.proto.journal.File.RemoveSyncPointEntry;
 import alluxio.proto.journal.Journal;
 import alluxio.proto.journal.Journal.JournalEntry;
+import alluxio.resource.CloseableIterator;
 import alluxio.resource.CloseableResource;
 import alluxio.resource.LockResource;
 import alluxio.retry.RetryUtils;
 import alluxio.security.user.ServerUserState;
 import alluxio.underfs.UfsManager;
 import alluxio.underfs.UnderFileSystem;
+import alluxio.util.ThreadFactoryUtils;
 import alluxio.util.io.PathUtils;
 import alluxio.wire.SyncPointInfo;
 
@@ -54,8 +57,10 @@ import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
@@ -92,9 +97,10 @@ public class ActiveSyncManager implements Journaled {
   // a lock which protects the above data structures
   private final Lock mLock;
   // a reference to FSM
-  private FileSystemMaster mFileSystemMaster;
+  private final FileSystemMaster mFileSystemMaster;
   // a local executor service used to launch polling threads
-  private ExecutorService mExecutorService;
+  private final ThreadPoolExecutor mExecutorService;
+  private boolean mStarted;
 
   /**
    * Constructs a Active Sync Manager.
@@ -114,8 +120,11 @@ public class ActiveSyncManager implements Journaled {
     // A lock used to protect the state stored in the above maps and lists
     mLock = new ReentrantLock();
     // Executor Service for active syncing
-    mExecutorService =
-        Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+    mExecutorService = new ThreadPoolExecutor(Runtime.getRuntime().availableProcessors(),
+        Runtime.getRuntime().availableProcessors(),
+        1, TimeUnit.MINUTES, new LinkedBlockingQueue<>(),
+        ThreadFactoryUtils.build("ActiveSyncManager-%d", false));
+    mExecutorService.allowCoreThreadTimeOut(true);
   }
 
   /**
@@ -144,7 +153,8 @@ public class ActiveSyncManager implements Journaled {
   public boolean isUnderSyncPoint(AlluxioURI path) {
     for (AlluxioURI syncedPath : mSyncPathList) {
       try {
-        if (PathUtils.hasPrefix(path.getPath(), syncedPath.getPath())) {
+        if (PathUtils.hasPrefix(path.getPath(), syncedPath.getPath())
+            && mMountTable.getMountPoint(path).equals(mMountTable.getMountPoint(syncedPath))) {
           return true;
         }
       } catch (InvalidPathException e) {
@@ -158,6 +168,7 @@ public class ActiveSyncManager implements Journaled {
    * Start the polling threads.
    */
   public void start() throws IOException {
+    mStarted = true;
     // Initialize UFS states
     for (AlluxioURI syncPoint : mSyncPathList) {
       MountTable.Resolution resolution;
@@ -342,10 +353,6 @@ public class ActiveSyncManager implements Journaled {
     }
     try (LockResource r = new LockResource(mLock)) {
       MountTable.Resolution resolution = mMountTable.resolve(syncPoint);
-      if (resolution == null) {
-        throw new InvalidPathException("Failed to stop sync point " + syncPoint
-            + " because it is not mounted.");
-      }
       LOG.debug("stop syncPoint {}", syncPoint.getPath());
       final long mountId = resolution.getMountId();
       RemoveSyncPointEntry removeSyncPoint = File.RemoveSyncPointEntry.newBuilder()
@@ -426,8 +433,9 @@ public class ActiveSyncManager implements Journaled {
         while (mountId == -1) {
           try {
             syncPointPath = mEntry.getPath();
-            MountTable.Resolution resolution = mMountTable.resolve(mEntry);
-            mountId = resolution.getMountId();
+            String mountPoint = mMountTable.getMountPoint(mEntry);
+            MountInfo mountInfo = mMountTable.getMountTable().get(mountPoint);
+            mountId = mountInfo.getMountId();
           } catch (InvalidPathException e) {
             LOG.info("Path resolution failed for {}, exception {}", syncPointPath, e);
             mEntry = null;
@@ -648,6 +656,10 @@ public class ActiveSyncManager implements Journaled {
    * 4. Stop the thread that is polling HDFS for events
    */
   public void stop() {
+    if (!mStarted) {
+      return;
+    }
+    mStarted = false;
     for (AlluxioURI syncPoint : mSyncPathList) {
       try {
         stopSyncInternal(syncPoint);
@@ -742,7 +754,8 @@ public class ActiveSyncManager implements Journaled {
   }
 
   @Override
-  public Iterator<JournalEntry> getJournalEntryIterator() {
-    return Iterators.concat(getSyncPathIterator(), getTxIdIterator());
+  public CloseableIterator<JournalEntry> getJournalEntryIterator() {
+    return CloseableIterator.noopCloseable(
+        Iterators.concat(getSyncPathIterator(), getTxIdIterator()));
   }
 }

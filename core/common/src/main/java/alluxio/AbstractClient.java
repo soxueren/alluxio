@@ -124,10 +124,14 @@ public abstract class AbstractClient implements Client {
 
   protected long getRemoteServiceVersion() throws AlluxioStatusException {
     // Calling directly as this method is subject to an encompassing retry loop.
-    return mVersionService
-        .getServiceVersion(
-            GetServiceVersionPRequest.newBuilder().setServiceType(getRemoteServiceType()).build())
-        .getVersion();
+    try {
+      return mVersionService
+          .getServiceVersion(
+              GetServiceVersionPRequest.newBuilder().setServiceType(getRemoteServiceType()).build())
+          .getVersion();
+    } catch (Throwable t) {
+      throw AlluxioStatusException.fromThrowable(t);
+    }
   }
 
   /**
@@ -238,8 +242,8 @@ public abstract class AbstractClient implements Client {
             getServiceName(), mAddress);
         return;
       } catch (IOException e) {
-        LOG.debug("Failed to connect ({}) with {} @ {}: {}", retryPolicy.getAttemptCount(),
-            getServiceName(), mAddress, e.getMessage());
+        LOG.debug("Failed to connect ({}) with {} @ {}", retryPolicy.getAttemptCount(),
+            getServiceName(), mAddress, e);
         lastConnectFailure = e;
         if (e instanceof UnauthenticatedException) {
           // If there has been a failure in opening GrpcChannel, it's possible because
@@ -264,7 +268,7 @@ public abstract class AbstractClient implements Client {
               retryPolicy.getAttemptCount()));
     }
 
-    /**
+    /*
      * Throw as-is if {@link UnauthenticatedException} occurred.
      */
     if (lastConnectFailure instanceof UnauthenticatedException) {
@@ -275,8 +279,12 @@ public abstract class AbstractClient implements Client {
           new ServiceNotFoundException(lastConnectFailure.getMessage(), lastConnectFailure));
     }
 
-    throw new UnavailableException(String.format("Failed to connect to %s @ %s after %s attempts",
-        getServiceName(), mAddress, retryPolicy.getAttemptCount()), lastConnectFailure);
+    throw new UnavailableException(
+        String.format(
+            "Failed to connect to master (%s) after %s attempts."
+                + "Please check if Alluxio master is currently running on \"%s\". Service=\"%s\"",
+            mAddress, retryPolicy.getAttemptCount(), mAddress, getServiceName()),
+        lastConnectFailure);
   }
 
   /**
@@ -357,12 +365,18 @@ public abstract class AbstractClient implements Client {
    */
   protected synchronized <V> V retryRPC(RpcCallable<V> rpc, Logger logger, String rpcName,
       String description, Object... args) throws AlluxioStatusException {
+    return retryRPC(mRetryPolicySupplier.get(), rpc, logger, rpcName, description, args);
+  }
+
+  protected synchronized <V> V retryRPC(RetryPolicy retryPolicy, RpcCallable<V> rpc,
+      Logger logger, String rpcName, String description, Object... args)
+      throws AlluxioStatusException {
     String debugDesc = logger.isDebugEnabled() ? String.format(description, args) : null;
     // TODO(binfan): create RPC context so we could get RPC duration from metrics timer directly
     long startMs = System.currentTimeMillis();
     logger.debug("Enter: {}({})", rpcName, debugDesc);
     try (Timer.Context ctx = MetricsSystem.timer(getQualifiedMetricName(rpcName)).time()) {
-      V ret = retryRPCInternal(rpc, () -> {
+      V ret = retryRPCInternal(retryPolicy, rpc, () -> {
         MetricsSystem.counter(getQualifiedRetryMetricName(rpcName)).inc();
         return null;
       });
@@ -386,9 +400,8 @@ public abstract class AbstractClient implements Client {
     }
   }
 
-  private synchronized <V> V retryRPCInternal(RpcCallable<V> rpc, Supplier<Void> onRetry)
-      throws AlluxioStatusException {
-    RetryPolicy retryPolicy = mRetryPolicySupplier.get();
+  private synchronized <V> V retryRPCInternal(RetryPolicy retryPolicy, RpcCallable<V> rpc,
+      Supplier<Void> onRetry) throws AlluxioStatusException {
     Exception ex = null;
     while (retryPolicy.attempt()) {
       if (mClosed) {

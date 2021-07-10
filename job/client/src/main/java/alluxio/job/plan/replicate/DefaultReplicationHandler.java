@@ -15,6 +15,8 @@ import alluxio.AlluxioURI;
 import alluxio.client.job.JobMasterClient;
 import alluxio.client.job.JobMasterClientPool;
 import alluxio.exception.AlluxioException;
+import alluxio.exception.status.NotFoundException;
+import alluxio.job.wire.Status;
 
 import java.io.IOException;
 
@@ -37,11 +39,22 @@ public final class DefaultReplicationHandler implements ReplicationHandler {
   }
 
   @Override
+  public Status getJobStatus(long jobId) throws IOException {
+    final JobMasterClient client = mJobMasterClientPool.acquire();
+    try {
+      return client.getJobStatus(jobId).getStatus();
+    } catch (NotFoundException e) {
+      // if the job status doesn't exist, assume the job has failed
+      return Status.FAILED;
+    }
+  }
+
+  @Override
   public long evict(AlluxioURI uri, long blockId, int numReplicas)
       throws AlluxioException, IOException {
     JobMasterClient client = mJobMasterClientPool.acquire();
     try {
-      return client.run(new EvictConfig(blockId, numReplicas));
+      return client.run(new EvictConfig(uri.getPath(), blockId, numReplicas));
     } finally {
       mJobMasterClientPool.release(client);
     }
@@ -63,7 +76,7 @@ public final class DefaultReplicationHandler implements ReplicationHandler {
       throws AlluxioException, IOException {
     JobMasterClient client = mJobMasterClientPool.acquire();
     try {
-      return client.run(new MoveConfig(blockId, workerHost, mediumType));
+      return client.run(new MoveConfig(uri.getPath(), blockId, workerHost, mediumType));
     } finally {
       mJobMasterClientPool.release(client);
     }

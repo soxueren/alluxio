@@ -9,8 +9,12 @@
 # See the NOTICE file distributed with this work for information regarding copyright ownership.
 #
 
-{{ $shortCircuitEnabled := .Values.shortCircuit.enabled -}}
-{{ $needDomainSocketVolume := and $shortCircuitEnabled (eq .Values.shortCircuit.policy "uuid") -}}
+{{- $shortCircuitEnabled := .Values.shortCircuit.enabled }}
+{{- $needDomainSocketVolume := and $shortCircuitEnabled (eq .Values.shortCircuit.policy "uuid") }}
+{{- $hostNetwork := .Values.worker.hostNetwork }}
+{{- $hostPID := .Values.worker.hostPID }}
+{{- $fullName := include "alluxio.fullname" . }}
+
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -35,28 +39,52 @@ spec:
         release: {{ .Release.Name }}
         heritage: {{ .Release.Service }}
         role: alluxio-worker
+    {{- if or .Values.worker.podAnnotations .Values.metrics.enabled }}
+      annotations:
+      {{- with .Values.worker.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.metrics.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
     spec:
-      hostNetwork: {{ .Values.worker.hostNetwork }}
-      dnsPolicy: {{ .Values.worker.dnsPolicy }}
-      securityContext:
-        fsGroup: {{ .Values.fsGroup }}
+      hostNetwork: {{ $hostNetwork }}
+      hostPID: {{ $hostPID }}
+      dnsPolicy: {{ .Values.worker.dnsPolicy | default ($hostNetwork | ternary "ClusterFirstWithHostNet" "ClusterFirst") }}
+      {{ if .Values.hostAliases }}
+      {{- include "alluxio.hostAliases" . | nindent 6 }}
+      {{ end }}
       nodeSelector:
       {{- if .Values.worker.nodeSelector }}
 {{ toYaml .Values.worker.nodeSelector | trim | indent 8  }}
       {{- else if .Values.nodeSelector }}
 {{ toYaml .Values.nodeSelector | trim | indent 8  }}
       {{- end }}
+      tolerations:
+      {{- if .Values.worker.tolerations }}
+{{ toYaml .Values.worker.tolerations | trim | indent 8  }}
+      {{- end }}
+      {{- if .Values.tolerations }}
+{{ toYaml .Values.tolerations | trim | indent 8  }}
+      {{- end }}
+      securityContext:
+        runAsUser: {{ .Values.user }}
+        runAsGroup: {{ .Values.group }}
+        fsGroup: {{ .Values.fsGroup }}
+    {{- if .Values.worker.serviceAccount }}
+      serviceAccountName: {{ .Values.worker.serviceAccount }}
+    {{- else if .Values.serviceAccount }}
+      serviceAccountName: {{ .Values.serviceAccount }}
+    {{- end }}
       containers:
         - name: alluxio-worker
           image: {{ .Values.image }}:{{ .Values.imageTag }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
-          securityContext:
-            runAsUser: {{ .Values.user }}
-            runAsGroup: {{ .Values.group }}
           {{- if .Values.worker.resources  }}
 {{ include "alluxio.worker.resources" . | indent 10 }}
           {{- end }}
-          command: ["/entrypoint.sh"]
+          command: ["tini", "--", "/entrypoint.sh"]
           {{- if .Values.worker.args }}
           args:
 {{ toYaml .Values.worker.args | trim | indent 12 }}
@@ -72,6 +100,10 @@ spec:
               fieldRef:
                 fieldPath: status.podIP
           {{- end }}
+          {{- range $key, $value := .Values.worker.env }}
+          - name: "{{ $key }}"
+            value: "{{ $value }}"
+          {{- end }}
           envFrom:
           - configMapRef:
               name: {{ template "alluxio.fullname" . }}-config
@@ -83,6 +115,10 @@ spec:
           - containerPort: {{ .Values.worker.ports.web }}
             name: web
           volumeMounts:
+            {{- if .Values.metrics.enabled }}
+            - name: {{ $fullName }}-metrics-volume
+              mountPath: /config/metrics
+            {{- end }}
             {{- if $needDomainSocketVolume }}
             - name: alluxio-domain
               mountPath: /opt/domain
@@ -100,14 +136,11 @@ spec:
             {{- end }}
         - name: alluxio-job-worker
           image: {{ .Values.image }}:{{ .Values.imageTag }}
-          securityContext:
-            runAsUser: {{ .Values.user }}
-            runAsGroup: {{ .Values.group }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           {{- if .Values.jobWorker.resources  }}
 {{ include "alluxio.jobWorker.resources" . | indent 10 }}
           {{- end }}
-          command: ["/entrypoint.sh"]
+          command: ["tini", "--", "/entrypoint.sh"]
           {{- if .Values.jobWorker.args }}
           args:
 {{ toYaml .Values.jobWorker.args | trim | indent 12 }}
@@ -123,6 +156,10 @@ spec:
               fieldRef:
                 fieldPath: status.podIP
           {{- end }}
+          {{- range $key, $value := .Values.jobWorker.env }}
+          - name: "{{ $key }}"
+            value: "{{ $value }}"
+          {{- end }}
           envFrom:
           - configMapRef:
               name: {{ template "alluxio.fullname" . }}-config
@@ -136,6 +173,10 @@ spec:
           - containerPort: {{ .Values.jobWorker.ports.web }}
             name: job-web
           volumeMounts:
+            {{- if .Values.metrics.enabled }}
+            - name: {{ $fullName }}-metrics-volume
+              mountPath: /config/metrics
+            {{- end }}
             {{- if $needDomainSocketVolume }}
             - name: alluxio-domain
               mountPath: /opt/domain
@@ -153,10 +194,13 @@ spec:
             {{- end }}
       restartPolicy: Always
       volumes:
+        {{- if .Values.metrics.enabled }}
+        - name: {{ $fullName }}-metrics-volume
+          configMap:
+            name: {{ $fullName }}-metrics
+        {{- end }}
         {{- if $needDomainSocketVolume }}
-        - name: alluxio-domain
-          persistentVolumeClaim:
-            claimName: "{{ .Values.shortCircuit.pvcName }}"
+{{- include "alluxio.worker.shortCircuit.volume" . }}
         {{- end }}
         {{- if .Values.secrets }}
           {{- if .Values.secrets.worker }}

@@ -119,6 +119,28 @@ resources:
     {{- end }}
 {{- end -}}
 
+{{- define "alluxio.logserver.resources" -}}
+resources:
+  limits:
+    {{- if .Values.logserver.resources.limits }}
+      {{- if .Values.logserver.resources.limits.cpu  }}
+    cpu: {{ .Values.logserver.resources.limits.cpu }}
+      {{- end }}
+      {{- if .Values.logserver.resources.limits.memory  }}
+    memory: {{ .Values.logserver.resources.limits.memory }}
+      {{- end }}
+    {{- end }}
+  requests:
+    {{- if .Values.logserver.resources.requests }}
+      {{- if .Values.logserver.resources.requests.cpu  }}
+    cpu: {{ .Values.logserver.resources.requests.cpu }}
+      {{- end }}
+      {{- if .Values.logserver.resources.requests.memory  }}
+    memory: {{ .Values.logserver.resources.requests.memory }}
+      {{- end }}
+    {{- end }}
+{{- end -}}
+
 {{- define "alluxio.journal.format.resources" -}}
 resources:
   limits:
@@ -157,6 +179,14 @@ resources:
   {{- end -}}
 {{- end -}}
 
+{{- define "alluxio.logserver.secretVolumeMounts" -}}
+  {{- range $key, $val := .Values.secrets.logserver }}
+          - name: secret-{{ $key }}-volume
+            mountPath: /secrets/{{ $val }}
+            readOnly: true
+  {{- end -}}
+{{- end -}}
+
 {{- define "alluxio.worker.tieredstoreVolumeMounts" -}}
   {{- if .Values.tieredstore.levels }}
     {{- range .Values.tieredstore.levels }}
@@ -166,11 +196,11 @@ resources:
         {{- if contains "," .mediumtype }}
           {{- $type := .type }}
           {{- $path := .path }}
-          {{- $split := split "," .mediumtype }}
-          {{- range $key, $val := $split }}
+          {{- $parts := splitList "," .mediumtype }}
+          {{- range $i, $val := $parts }}
             {{- /* Example: For path="/tmp/mem,/tmp/ssd", mountPath resolves to /tmp/mem and /tmp/ssd */}}
-            - mountPath: {{ index ($path | split ",") $key }}
-              name: {{ $val | lower }}-{{ replace $key "_" "" }}
+            - mountPath: {{ index ($path | splitList ",") $i }}
+              name: {{ $val | lower }}-{{ $i }}
           {{- end}}
         {{- /* The mediumtype is a single value. */}}
         {{- else}}
@@ -195,24 +225,24 @@ resources:
       {{- if .mediumtype }}
         {{- /* The mediumtype can have multiple parts like MEM,SSD */}}
         {{- if contains "," .mediumtype }}
-          {{- $split := split "," .mediumtype }}
+          {{- $parts := splitList "," .mediumtype }}
           {{- $type := .type }}
           {{- $path := .path }}
           {{- $volumeName := .name }}
           {{- /* A volume will be generated for each part */}}
-          {{- range $key, $val := $split }}
+          {{- range $i, $val := $parts }}
             {{- /* Example: For mediumtype="MEM,SSD", mediumName resolves to mem-0 and ssd-1 */}}
-            {{- $mediumName := printf "%v-%v" (lower $val) (replace $key "_" "") }}
+            {{- $mediumName := printf "%v-%v" (lower $val) $i }}
             {{- if eq $type "hostPath"}}
         - hostPath:
-            path: {{ index ($path | split ",") $key }}
+            path: {{ index ($path | splitList ",") $i }}
             type: DirectoryOrCreate
           name: {{ $mediumName }}
             {{- else if eq $type "persistentVolumeClaim" }}
         - name: {{ $mediumName }}
           persistentVolumeClaim:
             {{- /* Example: For volumeName="/tmp/mem,/tmp/ssd", claimName resolves to /tmp/mem and /tmp/ssd */}}
-            claimName: {{ index ($volumeName | split ",") $key }}
+            claimName: {{ index ($volumeName | splitList ",") $i }}
             {{- else }}
         - name: {{ $mediumName }}
           emptyDir:
@@ -257,34 +287,47 @@ resources:
   {{- end }}
 {{- end -}}
 
+{{- define "alluxio.worker.shortCircuit.volume" -}}
+  {{- if eq .Values.shortCircuit.volumeType "hostPath" }}
+        - name: alluxio-domain
+          hostPath:
+            path: {{ .Values.shortCircuit.hostPath }}
+            type: DirectoryOrCreate
+  {{- else }}
+        - name: alluxio-domain
+          persistentVolumeClaim:
+            claimName: "{{ .Values.shortCircuit.pvcName }}"
+  {{- end }}
+{{- end -}}
+
 {{- define "alluxio.master.readinessProbe" -}}
 readinessProbe:
-  exec:
-    command: ["alluxio-monitor.sh", "master"]
+  tcpSocket:
+    port: {{ index . "port" }}
 {{- end -}}
 
 {{- define "alluxio.jobMaster.readinessProbe" -}}
 readinessProbe:
-  exec:
-    command: ["alluxio-monitor.sh", "job_master"]
+  tcpSocket:
+    port: {{ index . "port" }}
 {{- end -}}
 
 {{- define "alluxio.worker.readinessProbe" -}}
 readinessProbe:
-  exec:
-    command: ["alluxio-monitor.sh", "worker"]
+  tcpSocket:
+    port: rpc
 {{- end -}}
 
 {{- define "alluxio.jobWorker.readinessProbe" -}}
 readinessProbe:
-  exec:
-    command: ["alluxio-monitor.sh", "job_worker"]
+  tcpSocket:
+    port: job-rpc
 {{- end -}}
 
 {{- define "alluxio.master.livenessProbe" -}}
 livenessProbe:
-  exec:
-    command: ["alluxio-monitor.sh", "master"]
+  tcpSocket:
+    port: {{ index . "port" }}
   initialDelaySeconds: 15
   periodSeconds: 30
   timeoutSeconds: 5
@@ -293,8 +336,8 @@ livenessProbe:
 
 {{- define "alluxio.jobMaster.livenessProbe" -}}
 livenessProbe:
-  exec:
-    command: ["alluxio-monitor.sh", "job_master"]
+  tcpSocket:
+    port: {{ index . "port" }}
   initialDelaySeconds: 15
   periodSeconds: 30
   timeoutSeconds: 5
@@ -303,8 +346,8 @@ livenessProbe:
 
 {{- define "alluxio.worker.livenessProbe" -}}
 livenessProbe:
-  exec:
-    command: ["alluxio-monitor.sh", "worker"]
+  tcpSocket:
+    port: rpc
   initialDelaySeconds: 15
   periodSeconds: 30
   timeoutSeconds: 5
@@ -313,10 +356,39 @@ livenessProbe:
 
 {{- define "alluxio.jobWorker.livenessProbe" -}}
 livenessProbe:
-  exec:
-    command: ["alluxio-monitor.sh", "job_worker"]
+  tcpSocket:
+    port: job-rpc
   initialDelaySeconds: 15
   periodSeconds: 30
   timeoutSeconds: 5
   failureThreshold: 2
+{{- end -}}
+
+{{- define "alluxio.logserver.log.volume" -}}
+{{- if eq .Values.logserver.volumeType "hostPath" }}
+- name: alluxio-logs
+  hostPath:
+    path: {{ .Values.logserver.hostPath }}
+    type: DirectoryOrCreate
+{{- else if eq .Values.logserver.volumeType "emptyDir" }}
+- name: alluxio-logs
+  emptyDir:
+    medium: {{ .Values.logserver.medium }}
+    sizeLimit: {{ .Values.logserver.size | quote }}
+{{- else }}
+- name: alluxio-logs
+  persistentVolumeClaim:
+    claimName: "{{ .Values.logserver.pvcName }}"
+{{- end }}
+{{- end -}}
+
+{{- define "alluxio.hostAliases" -}}
+hostAliases:
+{{- range .Values.hostAliases }}
+- ip: {{ .ip }}
+  hostnames:
+  {{- range .hostnames }}
+  - {{ . }}
+  {{- end }}
+{{- end }}
 {{- end -}}

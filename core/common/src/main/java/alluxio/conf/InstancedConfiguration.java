@@ -43,6 +43,9 @@ import javax.annotation.Nonnull;
 public class InstancedConfiguration implements AlluxioConfiguration {
   private static final Logger LOG = LoggerFactory.getLogger(InstancedConfiguration.class);
 
+  public static final AlluxioConfiguration EMPTY_CONFIGURATION
+      = new InstancedConfiguration(new AlluxioProperties());
+
   /** Regex string to find "${key}" for variable substitution. */
   private static final String REGEX_STRING = "(\\$\\{([^{}]*)\\})";
   /** Regex to find ${key} for variable substitution. */
@@ -301,14 +304,12 @@ public class InstancedConfiguration implements AlluxioConfiguration {
     Preconditions.checkArgument(delimiter != null,
         "Illegal separator for Alluxio properties as list");
     String rawValue = get(key);
-
     return ConfigurationUtils.parseAsList(rawValue, delimiter);
   }
 
   @Override
   public <T extends Enum<T>> T getEnum(PropertyKey key, Class<T> enumType) {
-    String rawValue = get(key);
-
+    String rawValue = get(key).toUpperCase();
     try {
       return Enum.valueOf(enumType, rawValue);
     } catch (IllegalArgumentException e) {

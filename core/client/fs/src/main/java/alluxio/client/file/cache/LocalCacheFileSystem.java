@@ -20,44 +20,29 @@ import alluxio.conf.AlluxioConfiguration;
 import alluxio.exception.AlluxioException;
 import alluxio.grpc.OpenFilePOptions;
 
+import com.google.common.base.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.util.Optional;
 
 /**
  * A FileSystem implementation with a local cache.
  */
 public class LocalCacheFileSystem extends DelegatingFileSystem {
   private static final Logger LOG = LoggerFactory.getLogger(LocalCacheFileSystem.class);
-  private static Optional<CacheManager> sCacheManager;
-
+  private final CacheManager mCacheManager;
   private final AlluxioConfiguration mConf;
 
   /**
+   * @param cacheManage cache manager
    * @param fs a FileSystem instance to query on local cache miss
    * @param conf the configuration, only respected for the first call
    */
-  @edu.umd.cs.findbugs.annotations.SuppressFBWarnings(
-      value = "ST_WRITE_TO_STATIC_FROM_INSTANCE_METHOD",
-      justification = "write to static is made threadsafe")
-  public LocalCacheFileSystem(FileSystem fs, AlluxioConfiguration conf) {
+  public LocalCacheFileSystem(CacheManager cacheManage, FileSystem fs, AlluxioConfiguration conf) {
     super(fs);
-    // TODO(feng): support multiple cache managers
-    if (sCacheManager == null) {
-      synchronized (LocalCacheFileSystem.class) {
-        if (sCacheManager == null) {
-          try {
-            sCacheManager = Optional.of(CacheManager.create(conf));
-          } catch (IOException e) {
-            LOG.warn("Failed to create CacheManager: {}", e.toString());
-            sCacheManager = Optional.empty();
-          }
-        }
-      }
-    }
-    mConf = conf;
+    mCacheManager = Preconditions.checkNotNull(cacheManage, "cacheManager");
+    mConf = Preconditions.checkNotNull(conf, "conf");
   }
 
   @Override
@@ -68,18 +53,19 @@ public class LocalCacheFileSystem extends DelegatingFileSystem {
   @Override
   public FileInStream openFile(AlluxioURI path, OpenFilePOptions options)
       throws IOException, AlluxioException {
-    if (sCacheManager == null || !sCacheManager.isPresent()) {
+    if (mCacheManager == null || mCacheManager.state() == CacheManager.State.NOT_IN_USE) {
       return mDelegatedFileSystem.openFile(path, options);
     }
-    return new LocalCacheFileInStream(path, options, mDelegatedFileSystem, sCacheManager.get());
+    return openFile(mDelegatedFileSystem.getStatus(path), options);
   }
 
   @Override
   public FileInStream openFile(URIStatus status, OpenFilePOptions options)
       throws IOException, AlluxioException {
-    if (sCacheManager == null || !sCacheManager.isPresent()) {
+    if (mCacheManager == null || mCacheManager.state() == CacheManager.State.NOT_IN_USE) {
       return mDelegatedFileSystem.openFile(status, options);
     }
-    return new LocalCacheFileInStream(status, options, mDelegatedFileSystem, sCacheManager.get());
+    return new LocalCacheFileInStream(status,
+        uriStatus -> mDelegatedFileSystem.openFile(status, options), mCacheManager, mConf);
   }
 }

@@ -3,7 +3,7 @@ layout: global
 title: 在Alluxio上运行Apache Flink
 nickname: Apache Flink
 group: Compute Integrations
-priority: 6
+priority: 2
 ---
 
 * 内容列表
@@ -13,9 +13,9 @@ priority: 6
 
 ## 前期准备
 
-开始之前你需要安装好Java。同时使用[本地模式]({{ '/cn/deploy/Running-Alluxio-Locally.html' | relativize_url }})或[集群模式]({{ '/cn/deploy/Running-Alluxio-on-a-Cluster.html' | relativize_url }})构建好Alluxio。
-
-请在[Apache Flink](http://flink.apache.org/)网站上阅读Flink安装说明。
+* 安装好Java 8 Update 161 (8u161+)或更新版本, 64-bit.。
+* 使用[本地模式]({{ '/cn/deploy/Running-Alluxio-Locally.html' | relativize_url }})或[集群模式]({{ '/cn/deploy/Running-Alluxio-on-a-Cluster.html' | relativize_url }})构建好Alluxio。
+* 请在[Apache Flink](http://flink.apache.org/)网站上阅读Flink安装说明。
 
 ## 配置
 
@@ -50,7 +50,7 @@ Apache Flink可以通过通用文件系统包装类（可用于Hadoop文件系�
 
 ### 布置Alluxio客户端Jar包
 
-为了与Alluxio通信，需要提供带有Alluxio核心客户端Jar包的Flink程序。我们推荐您直接从[http://www.alluxio.io/download](http://www.alluxio.io/download)下载压缩包。另外，高级用户可以选择用源文件编译产生客户端Jar包。遵循以下步骤：[here](Building-Alluxio-From-Source.html#compute-framework-support),在 `{{site.ALLUXIO_CLIENT_JAR_PATH_BUILD}}`路径下可以找到客户端的Jar包。
+为了与Alluxio通信，需要提供带有Alluxio核心客户端Jar包的Flink程序。我们推荐您直接从[http://www.alluxio.io/download](http://www.alluxio.io/download)下载压缩包。另外，高级用户可以选择用源文件编译产生客户端Jar包。遵循以下步骤：[here]({{ '/en/contributor/Building-Alluxio-From-Source.html' | relative_url }}),在 `{{site.ALLUXIO_CLIENT_JAR_PATH_BUILD}}`路径下可以找到客户端的Jar包。
 
 接下来需要让Alluxio `jar`文件对Flink可用，因为其中包含了配置好的`alluxio.hadoop.FileSystem`类。
 

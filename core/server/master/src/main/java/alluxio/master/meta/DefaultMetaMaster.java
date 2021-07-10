@@ -13,7 +13,6 @@ package alluxio.master.meta;
 
 import alluxio.ClientContext;
 import alluxio.Constants;
-import alluxio.ProjectConstants;
 import alluxio.Server;
 import alluxio.clock.SystemClock;
 import alluxio.collections.IndexDefinition;
@@ -40,20 +39,24 @@ import alluxio.heartbeat.HeartbeatThread;
 import alluxio.master.CoreMaster;
 import alluxio.master.CoreMasterContext;
 import alluxio.master.MasterClientContext;
+import alluxio.master.StateLockOptions;
 import alluxio.master.backup.BackupLeaderRole;
 import alluxio.master.backup.BackupRole;
 import alluxio.master.backup.BackupWorkerRole;
 import alluxio.master.block.BlockMaster;
 import alluxio.master.journal.JournalContext;
+import alluxio.master.journal.JournalType;
 import alluxio.master.journal.checkpoint.CheckpointName;
 import alluxio.master.meta.checkconf.ServerConfigurationChecker;
 import alluxio.master.meta.checkconf.ServerConfigurationStore;
 import alluxio.proto.journal.Journal;
 import alluxio.proto.journal.Meta;
+import alluxio.resource.CloseableIterator;
 import alluxio.resource.LockResource;
 import alluxio.underfs.UfsManager;
 import alluxio.util.ConfigurationUtils;
 import alluxio.util.IdUtils;
+import alluxio.util.OSUtils;
 import alluxio.util.ThreadFactoryUtils;
 import alluxio.util.executor.ExecutorServiceFactories;
 import alluxio.util.executor.ExecutorServiceFactory;
@@ -73,12 +76,13 @@ import java.net.InetSocketAddress;
 import java.time.Clock;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Executors;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 /**
@@ -160,6 +164,9 @@ public final class DefaultMetaMaster extends CoreMaster implements MetaMaster {
   /** Used to manage backup role. */
   private BackupRole mBackupRole;
 
+  @Nullable
+  private final JournalSpaceMonitor mJournalSpaceMonitor;
+
   /**
    * Journaled state for MetaMaster.
    */
@@ -206,13 +213,13 @@ public final class DefaultMetaMaster extends CoreMaster implements MetaMaster {
     }
 
     @Override
-    public Iterator<Journal.JournalEntry> getJournalEntryIterator() {
+    public CloseableIterator<Journal.JournalEntry> getJournalEntryIterator() {
       if (mClusterID.equals(INVALID_CLUSTER_ID)) {
-        return Collections.emptyIterator();
+        return CloseableIterator.noopCloseable(Collections.emptyIterator());
       }
-      return Collections.singleton(Journal.JournalEntry.newBuilder()
+      return CloseableIterator.noopCloseable(Collections.singleton(Journal.JournalEntry.newBuilder()
           .setClusterInfo(Meta.ClusterInfoEntry.newBuilder().setClusterId(mClusterID).build())
-          .build()).iterator();
+          .build()).iterator());
     }
   }
 
@@ -252,6 +259,12 @@ public final class DefaultMetaMaster extends CoreMaster implements MetaMaster {
 
     mPathProperties = new PathProperties();
     mState = new State();
+    if (ServerConfiguration.getEnum(PropertyKey.MASTER_JOURNAL_TYPE, JournalType.class)
+        .equals(JournalType.EMBEDDED) && OSUtils.isLinux()) {
+      mJournalSpaceMonitor = new JournalSpaceMonitor(ServerConfiguration.global());
+    } else {
+      mJournalSpaceMonitor = null;
+    }
   }
 
   @Override
@@ -265,6 +278,7 @@ public final class DefaultMetaMaster extends CoreMaster implements MetaMaster {
         new GrpcService(new MetaMasterMasterServiceHandler(this)));
     // Add backup role services.
     services.putAll(mBackupRole.getRoleServices());
+    services.putAll(mJournalSystem.getJournalServices());
     return services;
   }
 
@@ -306,14 +320,20 @@ public final class DefaultMetaMaster extends CoreMaster implements MetaMaster {
             ThreadFactoryUtils.build("DailyMetadataBackup-%d", true)), mUfsManager);
         mDailyBackup.start();
       }
+      if (mJournalSpaceMonitor != null) {
+        getExecutorService().submit(new HeartbeatThread(
+            HeartbeatContext.MASTER_JOURNAL_SPACE_MONITOR, mJournalSpaceMonitor,
+            ServerConfiguration.getMs(PropertyKey.MASTER_JOURNAL_SPACE_MONITOR_INTERVAL),
+            ServerConfiguration.global(), mMasterContext.getUserState()));
+      }
       if (mState.getClusterID().equals(INVALID_CLUSTER_ID)) {
         try (JournalContext context = createJournalContext()) {
           String clusterID = java.util.UUID.randomUUID().toString();
           mState.applyAndJournal(context, clusterID);
           LOG.info("Created new cluster ID {}", clusterID);
         }
-        if (Boolean.valueOf(ProjectConstants.UPDATE_CHECK_ENABLED)
-            && ServerConfiguration.getBoolean(PropertyKey.MASTER_UPDATE_CHECK_ENABLED)) {
+        if (ServerConfiguration.getBoolean(PropertyKey.MASTER_UPDATE_CHECK_ENABLED)
+            && !ServerConfiguration.getBoolean(PropertyKey.TEST_MODE)) {
           getExecutorService().submit(new HeartbeatThread(HeartbeatContext.MASTER_UPDATE_CHECK,
               new UpdateChecker(this),
               (int) ServerConfiguration.getMs(PropertyKey.MASTER_UPDATE_CHECK_INTERVAL),
@@ -357,8 +377,9 @@ public final class DefaultMetaMaster extends CoreMaster implements MetaMaster {
   }
 
   @Override
-  public BackupStatus backup(BackupPRequest request) throws AlluxioException {
-    return mBackupRole.backup(request);
+  public BackupStatus backup(BackupPRequest request, StateLockOptions stateLockOptions)
+      throws AlluxioException {
+    return mBackupRole.backup(request, stateLockOptions);
   }
 
   @Override
@@ -368,11 +389,14 @@ public final class DefaultMetaMaster extends CoreMaster implements MetaMaster {
 
   @Override
   public String checkpoint() throws IOException {
-    try (LockResource lr = new LockResource(mMasterContext.pauseStateLock())) {
+    try (LockResource lr =
+        mMasterContext.getStateLockManager().lockExclusive(StateLockOptions.defaults())) {
       mJournalSystem.checkpoint();
+      return NetworkAddressUtils.getConnectHost(NetworkAddressUtils.ServiceType.MASTER_RPC,
+          ServerConfiguration.global());
+    } catch (Exception e) {
+      throw new IOException("Failed to take a checkpoint.", e);
     }
-    return NetworkAddressUtils.getConnectHost(NetworkAddressUtils.ServiceType.MASTER_RPC,
-        ServerConfiguration.global());
   }
 
   @Override
@@ -417,6 +441,11 @@ public final class DefaultMetaMaster extends CoreMaster implements MetaMaster {
   @Override
   public ConfigHash getConfigHash() {
     return new ConfigHash(ServerConfiguration.hash(), mPathProperties.hash());
+  }
+
+  @Override
+  public Optional<JournalSpaceMonitor> getJournalSpaceMonitor() {
+    return Optional.ofNullable(mJournalSpaceMonitor);
   }
 
   @Override
@@ -561,8 +590,8 @@ public final class DefaultMetaMaster extends CoreMaster implements MetaMaster {
   }
 
   @Override
-  public Iterator<Journal.JournalEntry> getJournalEntryIterator() {
-    return com.google.common.collect.Iterators.concat(mPathProperties.getJournalEntryIterator(),
+  public CloseableIterator<Journal.JournalEntry> getJournalEntryIterator() {
+    return CloseableIterator.concat(mPathProperties.getJournalEntryIterator(),
         mState.getJournalEntryIterator());
   }
 
@@ -575,6 +604,34 @@ public final class DefaultMetaMaster extends CoreMaster implements MetaMaster {
   public void resetState() {
     mState.resetState();
     mPathProperties.resetState();
+  }
+
+  @Override
+  public Map<String, Boolean> updateConfiguration(Map<String, String> propertiesMap) {
+    Map<String, Boolean> result = new HashMap<>();
+    int successCount = 0;
+    for (Map.Entry<String, String> entry : propertiesMap.entrySet()) {
+      try {
+        PropertyKey key = PropertyKey.fromString(entry.getKey());
+        if (ServerConfiguration.getBoolean(PropertyKey.CONF_DYNAMIC_UPDATE_ENABLED)
+            && key.isDynamic()) {
+          String oldValue = ServerConfiguration.get(key);
+          ServerConfiguration.set(key, entry.getValue(), Source.RUNTIME);
+          result.put(entry.getKey(), true);
+          successCount++;
+          LOG.info("Property {} has been updated to \"{}\" from \"{}\"",
+              key.getName(), entry.getValue(), oldValue);
+        } else {
+          LOG.debug("Update a non-dynamic property {} is not allowed", key.getName());
+          result.put(entry.getKey(), false);
+        }
+      } catch (Exception e) {
+        result.put(entry.getKey(), false);
+        LOG.error("Failed to update property {} to {}", entry.getKey(), entry.getValue(), e);
+      }
+    }
+    LOG.debug("Update {} properties, succeed {}.", propertiesMap.size(), successCount);
+    return result;
   }
 
   /**

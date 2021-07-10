@@ -11,8 +11,9 @@
 
 package alluxio.client.file.cache.store;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.fail;
 
 import alluxio.Constants;
@@ -28,15 +29,11 @@ import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
 import java.io.ByteArrayOutputStream;
-import java.nio.ByteBuffer;
-import java.nio.channels.ReadableByteChannel;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -67,16 +64,13 @@ public class PageStoreTest {
   @Rule
   public TemporaryFolder mTemp = new TemporaryFolder();
 
-  @Rule
-  public final ExpectedException mThrown = ExpectedException.none();
-
   @Before
   public void before() throws Exception {
     mOptions.setPageSize(1024);
     mOptions.setCacheSize(65536);
     mOptions.setAlluxioVersion(ProjectConstants.VERSION);
     mOptions.setRootDir(mTemp.getRoot().getAbsolutePath());
-    mPageStore = PageStore.create(mOptions, true);
+    mPageStore = PageStore.create(mOptions);
   }
 
   @After
@@ -90,15 +84,12 @@ public class PageStoreTest {
     byte[] msgBytes = msg.getBytes();
     PageId id = new PageId("0", 0);
     mPageStore.put(id, msgBytes);
-    ByteBuffer buf = ByteBuffer.allocate(1024);
-    mPageStore.get(id).read(buf);
-    buf.flip();
-    String read = StandardCharsets.UTF_8.decode(buf).toString();
-    assertEquals(msg, read);
-    mPageStore.delete(id, msgBytes.length);
+    byte[] buf = new byte[1024];
+    assertEquals(msgBytes.length, mPageStore.get(id, buf));
+    assertArrayEquals(msgBytes, Arrays.copyOfRange(buf, 0, msgBytes.length));
+    mPageStore.delete(id);
     try {
-      buf.clear();
-      mPageStore.get(id).read(buf);
+      mPageStore.get(id, buf);
       fail();
     } catch (PageNotFoundException e) {
       // Test completed successfully;
@@ -108,15 +99,15 @@ public class PageStoreTest {
   @Test
   public void getOffset() throws Exception {
     int len = 32;
-    int offset = 3;
     PageId id = new PageId("0", 0);
     mPageStore.put(id, BufferUtils.getIncreasingByteArray(len));
-    ByteBuffer buf = ByteBuffer.allocate(1024);
-    try (ReadableByteChannel channel = mPageStore.get(id, offset)) {
-      channel.read(buf);
+    byte[] buf = new byte[len];
+    for (int offset = 1; offset < len; offset++) {
+      int bytesRead = mPageStore.get(id, offset, len, buf, 0);
+      assertEquals(len - offset, bytesRead);
+      assertArrayEquals(BufferUtils.getIncreasingByteArray(offset, len - offset),
+          Arrays.copyOfRange(buf, 0, bytesRead));
     }
-    buf.flip();
-    assertTrue(BufferUtils.equalIncreasingByteBuffer(offset, len - offset, buf));
   }
 
   @Test
@@ -125,11 +116,9 @@ public class PageStoreTest {
     int offset = 36;
     PageId id = new PageId("0", 0);
     mPageStore.put(id, BufferUtils.getIncreasingByteArray(len));
-    ByteBuffer buf = ByteBuffer.allocate(1024);
-    mThrown.expect(IllegalArgumentException.class);
-    try (ReadableByteChannel channel = mPageStore.get(id, offset)) {
-      channel.read(buf);
-    }
+    byte[] buf = new byte[1024];
+    assertThrows(IllegalArgumentException.class, () ->
+        mPageStore.get(id, offset, len, buf, 0));
   }
 
   @Test
@@ -162,6 +151,34 @@ public class PageStoreTest {
     assertEquals(pages, restored);
   }
 
+  @Test
+  public void getSmallLen() throws Exception {
+    int len = 32;
+    PageId id = new PageId("0", 0);
+    mPageStore.put(id, BufferUtils.getIncreasingByteArray(len));
+    byte[] buf = new byte[1024];
+    for (int b = 1; b < len; b++) {
+      int bytesRead = mPageStore.get(id, 0, b, buf, 0);
+      assertEquals(b, bytesRead);
+      assertArrayEquals(BufferUtils.getIncreasingByteArray(b),
+          Arrays.copyOfRange(buf, 0, bytesRead));
+    }
+  }
+
+  @Test
+  public void getSmallBuffer() throws Exception {
+    int len = 32;
+    PageId id = new PageId("0", 0);
+    mPageStore.put(id, BufferUtils.getIncreasingByteArray(len));
+    for (int b = 1; b < len; b++) {
+      byte[] buf = new byte[b];
+      int bytesRead = mPageStore.get(id, 0, len, buf, 0);
+      assertEquals(b, bytesRead);
+      assertArrayEquals(BufferUtils.getIncreasingByteArray(b),
+          Arrays.copyOfRange(buf, 0, bytesRead));
+    }
+  }
+
   @Ignore
   @Test
   public void perfTest() throws Exception {
@@ -184,14 +201,13 @@ public class PageStoreTest {
 
     ByteArrayOutputStream bos = new ByteArrayOutputStream(Constants.MB);
     ArrayList<Long> times = new ArrayList<>();
+    byte[] buf = new byte[Constants.MB];
     for (int i = 0; i < numTrials; i++) {
       Collections.shuffle(pages);
       long start = System.nanoTime();
       bos.reset();
-      ByteBuffer buf = ByteBuffer.allocate(Constants.MB);
-      for (Integer pageIndex  : pages) {
-        buf.clear();
-        store.get(new PageId("0", pageIndex)).read(buf);
+      for (Integer pageIndex : pages) {
+        store.get(new PageId("0", pageIndex), buf);
       }
       long end = System.nanoTime();
       times.add(end - start);

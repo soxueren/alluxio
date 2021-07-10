@@ -37,7 +37,7 @@ EOF
 #  $1: old version
 #  $2: new version
 function update_dataproc() {
-    perl -pi -e "s/${1}/${2}/g" integration/dataproc/alluxio.sh
+    perl -pi -e "s/${1}/${2}/g" integration/dataproc/alluxio-dataproc.sh
 }
 
 # Arguments:
@@ -59,6 +59,13 @@ function update_poms() {
 #  $2: new version
 function update_libexec() {
     perl -pi -e "s/${1}/${2}/g" libexec/alluxio-config.sh
+}
+
+# Arguments:
+#  $1: old version
+#  $2: new version
+function update_readme() {
+    perl -pi -e "s/${1}/${2}/g" README.md
 }
 
 # Arguments:
@@ -89,9 +96,6 @@ function update_docs() {
 function update_k8s() {
     perl -pi -e "s/${1}/${2}/g" \
         integration/kubernetes/helm-chart/alluxio/values.yaml
-    pushd integration/kubernetes
-    ./helm-generate.sh all
-    popd
 }
 
 function update_dockerfiles() {
@@ -132,6 +136,7 @@ function main() {
     update_dataproc "$_old" "$_new"
     update_emr "$_old" "$_new"
     update_libexec "$_old" "$_new"
+    update_readme "$_old" "$_new"
     update_docs "$_old" "$_new"
     update_k8s "$_old" "$_new"
     update_dockerfiles "$_old" "$_new"

@@ -1,6 +1,6 @@
 [![logo](docs/resources/alluxio_logo.png "Alluxio")](https://www.alluxio.io)
 
-[![Slack](https://slackin.alluxio.io/badge.svg)](https://www.alluxio.io/slack)
+[![Slack](https://img.shields.io/badge/slack-alluxio--community-blue.svg?logo=slack)](https://www.alluxio.io/slack)
 [![Release](https://img.shields.io/github/release/alluxio/alluxio/all.svg)](https://www.alluxio.io/download)
 [![Docker Pulls](https://img.shields.io/docker/pulls/alluxio/alluxio.svg)](https://hub.docker.com/r/alluxio/alluxio)
 [![Documentation](https://img.shields.io/badge/docs-reference-blue.svg)](https://www.alluxio.io/docs)
@@ -22,13 +22,23 @@ For more details, please refer to Haoyuan Li's PhD dissertation
 ## Who Uses Alluxio
 
 Alluxio is used in production to manage Petabytes of data in many leading companies, with
-the largest deployment exceeding 1300 nodes. You can find more use cases at
+the largest deployment exceeding 3,000 nodes. You can find more use cases at
 [Powered by Alluxio](https://www.alluxio.io/powered-by-alluxio) or visit our first community conference ([Data Orchestration Summit](https://www.alluxio.io/data-orchestration-summit-2019/)) to learn from other community members!
+
+## Who Owns and Manages Alluxio Project
+
+Alluxio Open Source Foundation is the owner of Alluxio project.
+Project operation is done by Alluxio Project Management Committee (PMC).
+You can checkout more details in its structure and how to join Alluxio PMC 
+[here](https://github.com/Alluxio/alluxio/wiki/Alluxio-Project-Management-Committee-(PMC)).
 
 ## Community and Events
 Please use the following to reach members of the community:
 
 * [Alluxio Community Slack Channel](https://www.alluxio.io/slack)
+* [Special Interest Groups (SIG) for Alluxio users and developers](https://github.com/Alluxio/alluxio/wiki/Alluxio-Community-Dev-Sync-Meetings)
+     * Alluxio and AI workloads: e.g., running Tensorflow, Pytorch on Alluxio
+     * Alluxio and Presto workloads: e.g., running Presto on Alluxio, running Alluxio catalog service
 * Community Events: [upcoming online office hours, meetups and webinars](https://www.alluxio.io/events)
 * Meetup Groups: [Global Online Meetup](https://www.meetup.com/Alluxio-Global-Online-Meetup/), [Bay Area Meetup](http://www.meetup.com/Alluxio),
 [New York Meetup](https://www.meetup.com/Alluxio-Open-Source-New-York-Meetup),
@@ -57,12 +67,12 @@ $ docker run -d --net=alluxio_nw \
     -v ufs:/opt/alluxio/underFSStorage \
     alluxio/alluxio master
 # Launch the Alluxio worker
-$ export ALLUXIO_WORKER_MEMORY_SIZE=1G
+$ export ALLUXIO_WORKER_RAMDISK_SIZE=1G
 $ docker run -d --net=alluxio_nw \
-    --shm-size=${ALLUXIO_WORKER_MEMORY_SIZE} \
+    --shm-size=${ALLUXIO_WORKER_RAMDISK_SIZE} \
     --name=alluxio-worker \
     -v ufs:/opt/alluxio/underFSStorage \
-    -e ALLUXIO_JAVA_OPTS="-Dalluxio.worker.memory.size=${ALLUXIO_WORKER_MEMORY_SIZE} -Dalluxio.master.hostname=alluxio-master" \
+    -e ALLUXIO_JAVA_OPTS="-Dalluxio.worker.ramdisk.size=${ALLUXIO_WORKER_RAMDISK_SIZE} -Dalluxio.master.hostname=alluxio-master" \
     alluxio/alluxio worker
 ```
 
@@ -102,13 +112,13 @@ Here are examples to declare the dependecies on  `alluxio-shaded-client` using M
   <dependency>
     <groupId>org.alluxio</groupId>
     <artifactId>alluxio-shaded-client</artifactId>
-    <version>2.2.0</version>
+    <version>2.5.0-2</version>
   </dependency>
   ```
 
 - SBT
   ```
-  libraryDependencies += "org.alluxio" % "alluxio-shaded-client" % "2.2.0"
+  libraryDependencies += "org.alluxio" % "alluxio-shaded-client" % "2.5.0-2"
   ```
 
 ## Contributing

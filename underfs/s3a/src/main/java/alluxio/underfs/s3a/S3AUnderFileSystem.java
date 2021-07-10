@@ -150,13 +150,14 @@ public class S3AUnderFileSystem extends ObjectUnderFileSystem {
     if (conf.isSet(PropertyKey.UNDERFS_S3_MAX_ERROR_RETRY)) {
       clientConf.setMaxErrorRetry(conf.getInt(PropertyKey.UNDERFS_S3_MAX_ERROR_RETRY));
     }
-
+    clientConf.setConnectionTTL(conf.getMs(PropertyKey.UNDERFS_S3_CONNECT_TTL));
     // Socket timeout
     clientConf
         .setSocketTimeout((int) conf.getMs(PropertyKey.UNDERFS_S3_SOCKET_TIMEOUT));
 
     // HTTP protocol
-    if (Boolean.parseBoolean(conf.get(PropertyKey.UNDERFS_S3_SECURE_HTTP_ENABLED))) {
+    if (Boolean.parseBoolean(conf.get(PropertyKey.UNDERFS_S3_SECURE_HTTP_ENABLED))
+        || Boolean.parseBoolean(conf.get(PropertyKey.UNDERFS_S3_SERVER_SIDE_ENCRYPTION_ENABLED))) {
       clientConf.setProtocol(Protocol.HTTPS);
     } else {
       clientConf.setProtocol(Protocol.HTTP);
@@ -452,7 +453,7 @@ public class S3AUnderFileSystem extends ObjectUnderFileSystem {
     @Override
     public String[] getCommonPrefixes() {
       List<String> res = mResult.getCommonPrefixes();
-      return res.toArray(new String[res.size()]);
+      return res.toArray(new String[0]);
     }
 
     @Override
@@ -496,7 +497,7 @@ public class S3AUnderFileSystem extends ObjectUnderFileSystem {
     @Override
     public String[] getCommonPrefixes() {
       List<String> res = mResult.getCommonPrefixes();
-      return res.toArray(new String[res.size()]);
+      return res.toArray(new String[0]);
     }
 
     @Override
@@ -554,14 +555,16 @@ public class S3AUnderFileSystem extends ObjectUnderFileSystem {
 
         bucketMode = S3AUtils.translateBucketAcl(acl, owner.getId());
         if (mUfsConf.isSet(PropertyKey.UNDERFS_S3_OWNER_ID_TO_USERNAME_MAPPING)) {
+          // Here accountOwner can be null if there is no mapping set for this owner id
           accountOwner = CommonUtils.getValueFromStaticMapping(
               mUfsConf.get(PropertyKey.UNDERFS_S3_OWNER_ID_TO_USERNAME_MAPPING), owner.getId());
-        } else {
+        }
+        if (accountOwner == null || accountOwner.equals(DEFAULT_OWNER)) {
           // If there is no user-defined mapping, use display name or id.
           accountOwner = owner.getDisplayName() != null ? owner.getDisplayName() : owner.getId();
         }
       } catch (AmazonClientException e) {
-        LOG.warn("Failed to inherit bucket ACLs, proceeding with defaults. {}", e.getMessage());
+        LOG.warn("Failed to inherit bucket ACLs, proceeding with defaults. {}", e.toString());
       }
     }
 

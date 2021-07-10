@@ -10,7 +10,7 @@ priority: 2
 {:toc}
 
 First off, we thank you for your interest in the Alluxio open source project!
-We greatly appreciate any contribution; whether new features or bug fixes.
+We greatly appreciate any contribution; whether it be new features or bug fixes.
 
 > If you are a first time contributor to the Alluxio open source project, we strongly encourage
 > you to follow the step-by-step instructions within the
@@ -27,27 +27,27 @@ the pull requests.
 - We encourage you to break your work into small, single-purpose patches if possible. It is more
 difficult to merge in a large change with a lot of disjoint features.
 - We track issues and features in our [Github Issues](https://github.com/alluxio/alluxio/issues).
-Open a ticket detailing the proposed change and what purpose it serves.
+Open an issue detailing the proposed change or the bug description.
 - Submit the patch as a GitHub pull request.
 - If your pull request aims to solve an existing Github issue, please include a link to the Github
 issue in the last line of the description field of the pull request,
-like `Fixes #1234`, `Fixed #1234`, `Fix #1234`, `Closes #1234`, `Closed #1234`, or `Close #1234`.
+such as `Fixes #1234`.
 - Please read our
 [pull request guidelines]({{ '/en/contributor/Contributor-Getting-Started.html' | relativize_url }}#sending-a-pull-request)
 for details.
 
 ## Coding Style
 
-- Please follow the style of the existing codebase. Specifically, we use
+- Please follow the style of the existing codebase. We mainly follow the
 [Google Java style](https://google.github.io/styleguide/javaguide.html),
-with the following changes or deviations:
+with the following deviations:
   - Maximum line length of **100** characters.
   - Third-party imports are grouped together to make IDE formatting much simpler.
   - Class member variable names should be prefixed with `m`
     - example: `private WorkerClient mWorkerClient;`
   - Static variable names should be prefixed with `s`
     - example: `private static String sUnderFSAddress;`
-- Bash scripts follow [Google Shell style](https://google.github.io/styleguide/shell.xml), and
+- Bash scripts follow the [Google Shell style](https://google.github.io/styleguide/shell.xml), and
 must be compatible with Bash 3.x
 - If you use Eclipse:
     - You can download our
@@ -68,12 +68,102 @@ rearranger, remove the unnecessary comments, then right click, choose "Rearrange
 will be formatted to what you want
 
 - To verify that the coding standards match, you should run
-[checkstyle](http://checkstyle.sourceforge.net) before sending a pull-request to verify no new
+[checkstyle](http://checkstyle.sourceforge.net) before sending a pull request to verify no new
 warnings are introduced:
 
 ```console
 $ mvn checkstyle:checkstyle
 ```
+
+## JavaDoc Style
+
+This codebase follows the [Oracle JavaDoc style](http://www.oracle.com/technetwork/java/javase/documentation/index-137868.html)
+with the following refinements:
+
+- All public classes/interfaces should have a class/interface-level comment that describes the purpose of the class/interface.
+
+- All public members should have a member-level comment the describes the purpose of the member.
+
+```java
+/** The number of logical bytes used. */
+public final AtomicLong mBytes = new AtomicLong(0);
+```
+
+- All public methods (including constructors) should use the following format.
+
+```java
+/**
+ * Does something. This is a method description that uses
+ * 3rd person (does something) as opposed to 2nd person (do
+ * something).
+ *
+ * @param param_1 description of 1st parameter
+ * ...
+ * @param param_n description of nth parameter
+ * @return description of return argument (if applicable)
+ * @throws exception_1 description of 1st exception case
+ * ...
+ * @throws exception_n description of nth exception case
+ */
+```
+
+- An exception to the above rule is that `@throws` doesn’t need to be provided for `@Test` methods,
+or for generic exceptions like IOException when there is nothing interesting to document.
+
+- Only write exception javadoc when you think it will be useful to the developer using the method.
+There are so many sources of `IOException` that it’s almost never useful to include javadoc for it.
+Do not write javadoc for unchecked exceptions like `RuntimeException` unless it is critical for this method.
+
+- Getters and setters should omit the method description if it is redundant and only use `@param` and `@return` descriptions.
+
+```java
+/**
+ * @return the number of pages stored
+ */
+long getPages();
+```
+
+- Most sentences should start with a capital letter and end with a period.
+An exception to this style is an isolated sentence;
+it does not start with a capital letter nor end with a period.
+    - GOOD (isolated): this is a short description
+    - GOOD (full sentence): This is a short description.
+    - GOOD (2 full sentences): This is a slightly longer description. It has two sentences.
+    - BAD: this is a short description.
+    - BAD: This is a short description
+    - BAD: this is a slightly longer description. It has two sentences
+
+- When writing the description, the first sentence should be a concise summary of the class or method
+and the description should generally be implementation-independent.
+It is a good idea to use additional sentences to describe any significant performance implications.
+
+```java
+/**
+ * The default implementation of a metadata store for pages stored in cache.
+ */
+public class DefaultMetaStore implements MetaStore {
+  ...
+}
+```
+
+- When the `@deprecated` annotation is added, it should also at least tell the user when the API was deprecated and what to use as a replacement with `@see` or `@link` tag.
+
+```java
+/**
+ * @deprecated as of Alluxio 2.1, replaced by
+ *             {@link #newMethodName(int,int,int,int)}
+ */
+```
+
+- When descriptions of `@param`, `@return`, `@throw` exceed one line,
+the text should align with the first argument after the tag.
+
+```java
+@throws FileAlreadyExistsException if there is already a file or directory at the given path
+        in Alluxio Filesystem
+```
+
+- When reference a class name in javadoc, prefer `<code>ClassName</code>` tags to `{@link ClassName}`.
 
 ## Logging Conventions
 
@@ -92,49 +182,55 @@ public MyClass {
 }
 ```
 
-### Use Parameterized Logging
+Note that, each class must use its own logger based on the class name,
+like `LoggerFactory.getLogger(MyClass.class)` in above example,
+so its output can easily be searched for.
+The location of the output of SLF4J loggers can be found for
+[server logs]({{ '/en/operation/Basic-Logging.html' | relativize_url }}#server-logs)
+and [application logs]({{ '/en/operation/Basic-Logging.html' | relativize_url }}#application-logs).
 
-If applicable, logging should be parameterized, to provide good performance and consistent syle.
+### Best Practice
 
-```java
+1. When applicable, logging should be parameterized, to provide good performance and consistent
+style.
+  ```java
 // Recommended: Parameterized logging
 LOG.debug("Client {} registered with {}", mClient, mHostname);
-
-// Not Recommended: Non-parameterized logging, hard to read and expensive due to String
+  ```
+  ```java
+// Not recommended: Non-parameterized logging, hard to read and expensive due to String
 // concatenation regardless of if DEBUG is enabled
-LOG.debug("Client " + mClient + " registered with " + mHostname);
-```
+  LOG.debug("Client " + mClient + " registered with " + mHostname);
+  ```
 
-### Error Messages Should Be Descriptive
-
+2. Error Messages Should Be Descriptive.
 Error messages should include enough detail and context to determine the issue and potential
 solution. This is important for quick diagnosis or fixes of errors.
-
-```java
+  ```java
 // Recommended: error messages with context
 LOG.error("Client {} failed to register to {}", mClient, mHostname, exception);
-
-// Not Recommended: There is no information on which client failed, or what the issue was 
+  ```
+  ```java
+// Not recommended: There is no information on which client failed, or what the issue was
 LOG.error("Client failed to register");
-```
+  ```
 
-### Log Messages Should Be Readable
-
+3. Log messages should be concise and readable.
 Log messages should be written with readability in mind. Here are some tips for writing good log
 messages.
-
-* Log levels INFO and above should be easily human readable
+  * Log levels `INFO` and above should be easily human readable
   * Log files should be concise and easy to read, noise reduces the value of logs
-* Keep the amount of additional English to a minimum
-* Clearly indicate if a variable reference is being printed by formatting the output as `variable: value`
-* Ensure objects being logged have appropriate `toString()` implementations
-* Use appropriate logger names
-  * Provides a key based on class name which can easily be searched for
-  * Example: `private static final Logger LOG = LoggerFactory.getLogger(AlluxioMaster.class);`
+  * Keep the amount of additional words to a minimum
+  * Clearly indicate if a variable reference is being printed by formatting the output as `variable: value`
+  * Ensure objects being logged have appropriate `toString()` implementations
 
-### Log Level Guidelines
+4. Error level logs should have troubleshooting pointers if applicable
 
-There are several levels of logging. Here are the guidelines for deciding which level to use.
+### Which logging level to use
+
+There are several levels of logging, see detailed explanation of
+[different Levels]({{ '/en/operation/Basic-Logging.html' | relativize_url }}#configuring-log-levels)
+Here are the guidelines for deciding which level to use.
 
 #### Error Log Level
 
@@ -142,7 +238,13 @@ Error level logging (`LOG.error`) indicates system level problems which cannot b
 from. It should always be accompanied by a stack trace.
 
 ```java
+// Recommended
 LOG.error("Failed to do something due to an exception", e);
+```
+
+```java
+// Not recommended: stack trace will not be logged
+LOG.error("Failed to do something due to an exception {}", e);
 ```
 
 **When to Use**
@@ -164,7 +266,18 @@ and Alluxio behavior. Warn level logs are accompanied by an exception message. T
 trace may be found in debug level logs.
 
 ```java
+// Recommended
 LOG.warn("Failed to do something: {}", e.toString());
+// Recommended
+LOG.warn("Failed to do something: {}", e);
+```
+
+```java
+// Not recommended: this will print out the stack trace
+LOG.warn("Failed to do something", e);
+// Not recommended: the exception class name is not included
+LOG.warn("Failed to do something", e.getMessage());
+
 ```
 
 **When to Use**
@@ -218,7 +331,9 @@ LOG.debug("Failed to connect to {} due to exception", mAddress, e);
 if (LOG.isDebugEnabled()) {
     LOG.debug("Failed to connect to address {} due to exception", host + ":" + port, e);
 }
+```
 
+```java
 // Not recommended: string concatenation is always performed
 LOG.debug("Failed to connect to {} due to exception", host + ":" + port, e);
 ```
@@ -277,7 +392,7 @@ public void handleRawUserInput(String date) throws InvalidDateException {
     throw new RuntimeExcepiton("date " + date + " is invalid", e);
   }
 }
-```  
+```
 
 #### Design code to minimize use of checked exceptions
 
@@ -318,8 +433,8 @@ See this
 
 #### Never Ignore InterruptedException
 
-InterruptedException means that another thread has signalled that this thread should die. There are
-a few acceptable ways to handle InterruptedException, listed in order of preference.
+An `InterruptedException` means that another thread has signalled that this thread should die. There are
+a few acceptable ways to handle an `InterruptedException`, listed in order of preference.
 
 **Actually stop the thread**
 
@@ -376,8 +491,8 @@ public void myMethod() {
 #### Always release resources, even in the event of an unchecked exception
 
 Assume that any method might throw an unchecked exception and make sure this doesn't cause resource
-leaks. We do not stop servers when RPC threads throw RuntimeExceptions. try-finally and
-try-with-resources blocks can make releasing resources much easier.
+leaks. We do not stop servers when RPC threads throw RuntimeExceptions. `try-finally` and
+`try-with-resources` blocks can make releasing resources much easier.
 
 ```java
 // with try-finally
@@ -413,7 +528,7 @@ resources.
 Closer closer = new Closer();
 closer.register(resource1);
 closer.register(resource2);
-closer.close();  
+closer.close();
 ```
 
 If both calls to `close()` throw an exception, the first exception will be thrown and the second
@@ -424,8 +539,8 @@ exception will be added as a suppressed exception of the first one.
 From the Closer javadoc:
 
 ```java
-Closer closer = Closer.create();   
-try {   
+Closer closer = Closer.create();
+try {
   InputStream in = closer.register(openInputStream());
   OutputStream out = closer.register(openOutputStream());
   // do stuff
@@ -472,7 +587,7 @@ try {
 
 ### Use the @Nullable annotation for all methods which may return null
 
-This will improve static analysis of our code so that we can detect potential NullPointerExceptions
+This will improve static analysis of our code so that we can detect potential `NullPointerException`s
 before they happen.
 
 Use the `javax.annotation.Nullable` import.
@@ -538,17 +653,17 @@ import static org.junit.Assert.assertFalse;
 ### Unit Test Goals
 
 1. Unit tests act as examples of how to use the code under test.
-2. Unit tests detect when an object breaks it's specification.
+2. Unit tests detect when an object breaks its specification.
 3. Unit tests *don't* break when an object is refactored but still meets the same specification.
 
 ### How to Write a Unit Test
 
-1. If creating an instance of the class takes some work, create a `@Before` method to perform
-common setup. The `@Before` method gets run automatically before each unit test. Only do general
-setup which will apply to every test. Test-specific setup should be done locally in the tests that
-need it. In this example, we are testing a `BlockMaster`, which depends on a journal, clock, and
-executor service. The executor service and journal we provide are real implementations, and the
-`TestClock` is a fake clock which can be controlled by unit tests.
+1. If creating an instance of the class takes some work, create a `@Before` method to perform shared setup steps.
+The `@Before` method gets run automatically before each unit test.
+Test-specific setup should be done locally in the tests that need it.
+In this example, we are testing a `BlockMaster`, which depends on a journal, clock, and executor service.
+The executor service and journal we provide are real implementations,
+and the `TestClock` is a fake clock which can be controlled by unit tests.
 
 ```java
 @Before
@@ -563,8 +678,8 @@ public void before() throws Exception {
 ```
 
 2. If anything created in `@Before` creates something which needs to be cleaned up (e.g. a
-`BlockMaster`), create an `@After` method to do the cleanup. This method is automatically called
-after each test.
+`BlockMaster`), create an `@After` method to do the cleanup.
+This method is automatically called after each test.
 
 ```java
 @After
@@ -621,7 +736,7 @@ assertEquals(worker1, Iterables.getOnlyElement(info).getId());
 1. The tests for `src/main/java/ClassName.java` should go in `src/test/java/ClassNameTest.java`
 2. Tests do not need to handle or document specific checked exceptions. Prefer to simply add
 `throws Exception` to the test method signature.
-3. Aim to keep tests short and simple enough that they don't require comments to understand.
+3. Aim to keep tests short and simple enough so that they don't require comments to understand.
 
 ### Patterns to avoid
 

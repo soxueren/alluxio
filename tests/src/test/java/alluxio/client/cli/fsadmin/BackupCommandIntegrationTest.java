@@ -30,7 +30,10 @@ import java.nio.file.Paths;
  * Integration tests for the backup command.
  */
 @LocalAlluxioClusterResource.ServerConfig(
-    confParams = {Name.MASTER_BACKUP_DIRECTORY, "${alluxio.work.dir}/backups"})
+    confParams = {
+        Name.MASTER_BACKUP_DIRECTORY, "${alluxio.work.dir}/backups",
+        Name.MASTER_SHELL_BACKUP_STATE_LOCK_TRY_DURATION, "3s",
+        Name.MASTER_SHELL_BACKUP_STATE_LOCK_TIMEOUT, "3s"})
 public final class BackupCommandIntegrationTest extends AbstractFsAdminShellTest {
   @Test
   public void defaultDirectory() throws IOException {
@@ -40,7 +43,7 @@ public final class BackupCommandIntegrationTest extends AbstractFsAdminShellTest
     int errCode = mFsAdminShell.run("backup");
     assertEquals("", mErrOutput.toString());
     assertEquals(0, errCode);
-    assertEquals(1, Files.list(dir).count());
+    assertEquals(2, Files.list(dir).count());
   }
 
   @Test
@@ -51,6 +54,6 @@ public final class BackupCommandIntegrationTest extends AbstractFsAdminShellTest
     int errCode = mFsAdminShell.run("backup", dir.toAbsolutePath().toString());
     assertEquals("", mErrOutput.toString());
     assertEquals(0, errCode);
-    assertEquals(1, Files.list(dir).count());
+    assertEquals(2, Files.list(dir).count());
   }
 }

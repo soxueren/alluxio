@@ -22,7 +22,7 @@ There are two kinds of supported transformations:
 1. coalesce the files so that each file is at least a certain size and there will be a maximum of certain number of files.
 2. convert CSV files to Parquet files
 
-> In Alluxio version 2.2.0, the transformed data is always written in Parquet format.
+> In Alluxio version 2.2.0 and later, the transformed data is always written in Parquet format.
 
 Before running a transformation, you should first attach a database.
 The following command attaches the "default" database in Hive to Alluxio.
@@ -57,7 +57,7 @@ It will show the status of the transformation job:
 ```console
 database: default
 table: test
-transformation: write(hive).option(hive.file.count.max, 100).option(hive.file.size.min, 2147483648)
+transformation: file.count.max=100
 job ID: 1572296710137
 job status: COMPLETED
 ```

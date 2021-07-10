@@ -2,7 +2,7 @@
 layout: global
 title: Running Alluxio on Google Cloud Dataproc
 nickname: Google Dataproc
-group: Alluxio in the Cloud
+group: Cloud Native
 priority: 4
 ---
 
@@ -15,23 +15,28 @@ This guide describes how to configure Alluxio to run on
 ## Overview
 
 [Google Cloud Dataproc](https://cloud.google.com/dataproc) is a managed on-demand service to run
-Presto, Spark and Hadoop compute workloads.
+Presto, Spark, and Hadoop compute workloads.
 It manages the deployment of various Hadoop Services and allows for hooks into these services for
 customizations.
-Aside from the added performance benefits of caching, Alluxio also enables users to run compute 
-workloads against on-premise storage, or even a different cloud provider's storage such as AWS S3
+Aside from the added performance benefits of caching, Alluxio enables users to run compute
+workloads against on-premise storage or a different cloud provider's storage such as AWS S3
 and Azure Blob Store.
 
 ## Prerequisites
 
 * A project with Cloud Dataproc API and Compute Engine API enabled.
 * A GCS Bucket.
-* Make sure that the gcloud CLI is set up with necessary GCS interoperable storage access keys.
-> Note: GCS interoperability should be enabled in the Interoperability tab in
-> [GCS setting](https://console.cloud.google.com/storage/settings).
+* The gcloud CLI set up with necessary GCS interoperable storage access keys.
 
-A GCS bucket is required if mounted to the root of the Alluxio namespace.
-Alternatively, the root UFS can be reconfigured to HDFS or any other supported under store.
+> Note: GCS interoperability should be enabled in the Interoperability tab in
+> [GCS settings](https://console.cloud.google.com/storage/settings).
+
+A GCS bucket is required if mounting the bucket to the root of the Alluxio namespace.
+Alternatively, the root UFS can be reconfigured to be HDFS or any other supported under storage.
+Type of VM instance to be used for Alluxio Master and Worker depends on the workload
+characteristics. General recommended types of VM instances for Alluxio Master are
+n2-highmem-16 or n2-highmem-32. VM instance types of n2-standard-16 or n2-standard-32
+enable use of SSD as Alluxio worker storage tier.
 
 ## Basic Setup
 
@@ -40,17 +45,29 @@ When creating a Dataproc cluster, Alluxio can be installed using an
 
 ### Create a cluster
 
-There are several properties set as metadata labels which control the Alluxio Deployment. 
-* A required argument is the root UFS address configured using **alluxio_root_ufs_uri**.
-* Properties must be specified using the metadata key **alluxio_site_properties** delimited using
-a semicolon (`;`).
+There are several properties set as metadata labels which control the Alluxio deployment.
+* A required argument is the root UFS address configured using `alluxio_root_ufs_uri`.
+If set to `LOCAL`, the HDFS cluster residing within the same Dataproc cluster will be used as Alluxio's root UFS.
+* Specify properties using the metadata key `alluxio_site_properties`.
+Delimit multiple properties with a semicolon (`;`).
 
+Example 1: use google cloud storage bucket as Alluxio root UFS
 ```console
 $ gcloud dataproc clusters create <cluster_name> \
 --initialization-actions gs://alluxio-public/dataproc/{{site.ALLUXIO_VERSION_STRING}}/alluxio-dataproc.sh \
 --metadata \
 alluxio_root_ufs_uri=gs://<my_bucket>,\
 alluxio_site_properties="fs.gcs.accessKeyId=<my_access_key>;fs.gcs.secretAccessKey=<my_secret_key>"
+```
+
+Example 2: use Dataproc internal HDFS as Alluxio root UFS
+```console
+$ gcloud dataproc clusters create <cluster_name> \
+--initialization-actions gs://alluxio-public/dataproc/{{site.ALLUXIO_VERSION_STRING}}/alluxio-dataproc.sh \
+--metadata \
+alluxio_root_ufs_uri="LOCAL",\
+alluxio_hdfs_version="2.9",\
+alluxio_site_properties="alluxio.master.mount.table.root.option.alluxio.underfs.hdfs.configuration=/etc/hadoop/conf/core-site.xml:/etc/hadoop/conf/hdfs-site.xml"
 ```
 
 ### Customization
@@ -85,7 +102,7 @@ alluxio_download_files_list="gs://<my_bucket>/<my_file>;https://<server>/<file>"
 
   {% collapsible Tiered Storage %}
 The default Alluxio Worker memory is set to 1/3 of the physical memory on the instance.
-If a specific value is desired, set `alluxio.worker.memory.size` in the provided
+If a specific value is desired, set `alluxio.worker.ramdisk.size` in the provided
 `alluxio-site.properties`.
 
 Alternatively, when volumes such as
@@ -106,6 +123,7 @@ alluxio_ssd_capacity_usage="60",\
 {% endaccordion %}
 
 ## Next steps
+
 The status of the cluster deployment can be monitored using the CLI.
 ```console
 $ gcloud dataproc clusters list
@@ -116,14 +134,14 @@ $ gcloud compute ssh <cluster_name>-m
 ```
 Test that Alluxio is running as expected
 ```console
-$ alluxio runTests
+$ sudo runuser -l alluxio -c "alluxio runTests"
 ```
 
-Alluxio is installed in `/opt/alluxio/` by default.
+Alluxio is installed and configured in `/opt/alluxio/`. Alluxio services are started as `alluxio` user.
 
 ## Compute Applications
 
-Spark, Hive and Presto on Dataproc are pre-configured to connect to Alluxio.
+Spark, Hive, and Presto on Dataproc are pre-configured to connect to Alluxio.
 
 {% navtabs compute %}
 {% navtab Spark %}
@@ -151,10 +169,11 @@ $ wget http://files.grouplens.org/datasets/movielens/ml-100k.zip
 $ unzip ml-100k.zip
 ```
 
-Copy the data to Alluxio
+Copy the data to Alluxio as the `alluxio` user.
+Your default user does not have write permissions to the Alluxio filesystem root by default.
 ```console
-$ alluxio fs mkdir /ml-100k
-$ alluxio fs copyFromLocal ~/ml-100k/u.user /ml-100k/
+$ sudo su alluxio -c 'alluxio fs mkdir /ml-100k'
+$ sudo su alluxio -c 'alluxio fs copyFromLocal ~/ml-100k/u.user /ml-100k/'
 ```
 
 Open the Hive CLI.
@@ -187,14 +206,14 @@ For further information, visit our Hive on Alluxio
 
 Note: There are two ways to install Presto on Dataproc.
 * [Optional Component for Presto](https://cloud.google.com/dataproc/docs/concepts/components/presto)
-is the default Presto configuration with the install home as `/usr/lib/presto`.
+is the default Presto configuration with the installation home directory at `/usr/lib/presto`.
 To use this mechanism, no additional configuration is needed for the Alluxio initialization action.
 * If using an initialization action to install an alternate distribution of Presto, override the
-default home directory as it differs from the install home for the optional component.
+default home directory to a different directory than the above default Presto installation.
 Set the metadata label `alluxio_presto_home=/opt/presto-server` with the `gcloud clusters create`
-command to ensure Presto is configured to use Alluxio.
+command to ensure the alternative Presto installation is configured to use Alluxio.
 
-To test Presto on Alluxio, simply run a query on the table created in the Hive section above:
+To test Presto on Alluxio, run the following query on the table created in the Hive section:
 ```console
 presto --execute "select * from u_user limit 10;" --catalog hive --schema default
 ```

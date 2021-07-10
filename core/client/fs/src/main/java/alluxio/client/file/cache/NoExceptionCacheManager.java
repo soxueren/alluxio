@@ -11,16 +11,14 @@
 
 package alluxio.client.file.cache;
 
+import alluxio.client.quota.CacheQuota;
+import alluxio.client.quota.CacheScope;
 import alluxio.metrics.MetricKey;
 import alluxio.metrics.MetricsSystem;
 
 import com.codahale.metrics.Counter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.nio.channels.ReadableByteChannel;
-
-import javax.annotation.Nullable;
 
 /**
  * A wrapper class of CacheManager without throwing unchecked exceptions.
@@ -48,27 +46,37 @@ public class NoExceptionCacheManager implements CacheManager {
     }
   }
 
-  @Nullable
   @Override
-  public ReadableByteChannel get(PageId pageId) {
+  public boolean put(PageId pageId, byte[] page, CacheScope cacheScope, CacheQuota cacheQuota) {
     try {
-      return mCacheManager.get(pageId);
+      return mCacheManager.put(pageId, page, cacheScope, cacheQuota);
     } catch (Exception e) {
-      LOG.error("Failed to get page {}", pageId, e);
-      Metrics.GET_ERRORS.inc();
-      return null;
+      LOG.error("Failed to put page {}, scope {}, quota {}", pageId, cacheScope, cacheQuota, e);
+      Metrics.PUT_ERRORS.inc();
+      return false;
     }
   }
 
-  @Nullable
   @Override
-  public ReadableByteChannel get(PageId pageId, int pageOffset) {
+  public int get(PageId pageId, int bytesToRead, byte[] buffer, int offsetInBuffer) {
     try {
-      return mCacheManager.get(pageId, pageOffset);
+      return mCacheManager.get(pageId, bytesToRead, buffer, offsetInBuffer);
+    } catch (Exception e) {
+      LOG.error("Failed to get page {}", pageId, e);
+      Metrics.GET_ERRORS.inc();
+      return -1;
+    }
+  }
+
+  @Override
+  public int get(PageId pageId, int pageOffset, int bytesToRead, byte[] buffer,
+      int offsetInBuffer) {
+    try {
+      return mCacheManager.get(pageId, pageOffset, bytesToRead, buffer, offsetInBuffer);
     } catch (Exception e) {
       LOG.error("Failed to get page {}, offset {}", pageId, pageOffset, e);
       Metrics.GET_ERRORS.inc();
-      return null;
+      return -1;
     }
   }
 
@@ -81,6 +89,11 @@ public class NoExceptionCacheManager implements CacheManager {
       Metrics.DELETE_ERRORS.inc();
       return false;
     }
+  }
+
+  @Override
+  public State state() {
+    return mCacheManager.state();
   }
 
   @Override

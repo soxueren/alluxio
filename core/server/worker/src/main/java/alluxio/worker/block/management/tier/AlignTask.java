@@ -23,6 +23,9 @@ import alluxio.worker.block.BlockStoreLocation;
 import alluxio.worker.block.annotator.BlockOrder;
 import alluxio.worker.block.evictor.BlockTransferInfo;
 import alluxio.worker.block.management.AbstractBlockManagementTask;
+import alluxio.worker.block.management.BlockManagementTaskResult;
+import alluxio.worker.block.management.BlockOperationResult;
+import alluxio.worker.block.management.BlockOperationType;
 import alluxio.worker.block.management.ManagementTaskCoordinator;
 import alluxio.worker.block.management.StoreLoadTracker;
 
@@ -66,13 +69,14 @@ public class AlignTask extends AbstractBlockManagementTask {
   }
 
   @Override
-  public void run() {
+  public BlockManagementTaskResult run() {
     LOG.debug("Running align task.");
     // Acquire align range from the configuration.
     // This will limit swap operations in a single run.
     final int alignRange =
         ServerConfiguration.getInt(PropertyKey.WORKER_MANAGEMENT_TIER_ALIGN_RANGE);
 
+    BlockManagementTaskResult result = new BlockManagementTaskResult();
     // Align each tier intersection by swapping blocks.
     for (Pair<BlockStoreLocation, BlockStoreLocation> intersection : mMetadataManager
         .getStorageTierAssoc().intersectionList()) {
@@ -81,8 +85,8 @@ public class AlignTask extends AbstractBlockManagementTask {
 
       // Get list per tier that will be swapped for aligning the intersection.
       Pair<List<Long>, List<Long>> swapLists = mMetadataManager.getBlockIterator().getSwaps(
-          tierUpLoc, BlockOrder.Natural, tierDownLoc, BlockOrder.Reverse, alignRange,
-          BlockOrder.Reverse, (blockId) -> !mEvictorView.isBlockEvictable(blockId));
+          tierUpLoc, BlockOrder.NATURAL, tierDownLoc, BlockOrder.REVERSE, alignRange,
+          BlockOrder.REVERSE, (blockId) -> !mEvictorView.isBlockEvictable(blockId));
 
       Preconditions.checkArgument(swapLists.getFirst().size() == swapLists.getSecond().size());
       LOG.debug("Acquired {} block pairs to align tiers {} - {}", swapLists.getFirst().size(),
@@ -92,14 +96,18 @@ public class AlignTask extends AbstractBlockManagementTask {
       // due to insufficient reserved space.
       Consumer<Exception> excHandler = (e) -> {
         if (e instanceof WorkerOutOfSpaceException) {
+          LOG.warn("Insufficient space for worker swap space, swap restore task called.");
           // Mark the need for running swap-space restoration task.
           TierManagementTaskProvider.setSwapRestoreRequired(true);
         }
       };
 
       // Execute swap transfers.
-      mTransferExecutor.executeTransferList(generateSwapTransferInfos(swapLists), excHandler);
+      BlockOperationResult tierResult =
+          mTransferExecutor.executeTransferList(generateSwapTransferInfos(swapLists), excHandler);
+      result.addOpResults(BlockOperationType.ALIGN_SWAP, tierResult);
     }
+    return result;
   }
 
   private List<BlockTransferInfo> generateSwapTransferInfos(

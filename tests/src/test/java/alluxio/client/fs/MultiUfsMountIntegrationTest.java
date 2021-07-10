@@ -250,7 +250,7 @@ public final class MultiUfsMountIntegrationTest extends BaseIntegrationTest {
     try (FsMasterResource masterResource = MasterTestUtils
         .createLeaderFileSystemMasterFromJournal()) {
       FileSystemMaster fsMaster = masterResource.getRegistry().get(FileSystemMaster.class);
-      Map<String, MountPointInfo> mountTable = fsMaster.getMountTable();
+      Map<String, MountPointInfo> mountTable = fsMaster.getMountPointInfoSummary();
       Assert.assertTrue(mountTable.containsKey(MOUNT_POINT1));
       Assert.assertTrue(mountTable.containsKey(MOUNT_POINT2));
       MountPointInfo mountPointInfo1 = mountTable.get(MOUNT_POINT1);
@@ -286,10 +286,11 @@ public final class MultiUfsMountIntegrationTest extends BaseIntegrationTest {
   public void mountWithCredentials() throws Exception {
     MountPOptions options3 = MountPOptions.newBuilder().putAllProperties(UFS_CONF3).build();
     mFileSystem.mount(mMountPoint3, new AlluxioURI(mUfsUri3), options3);
+    mLocalAlluxioCluster.stopFS();
     try (FsMasterResource masterResource = MasterTestUtils
         .createLeaderFileSystemMasterFromJournal()) {
       FileSystemMaster fsMaster = masterResource.getRegistry().get(FileSystemMaster.class);
-      Map<String, MountPointInfo> mountTable = fsMaster.getMountTable();
+      Map<String, MountPointInfo> mountTable = fsMaster.getMountPointInfoSummary();
       Assert.assertTrue(mountTable.containsKey(MOUNT_POINT3));
       MountPointInfo mountPointInfo3 = mountTable.get(MOUNT_POINT3);
       Assert.assertEquals(mUfsUri3, mountPointInfo3.getUfsUri());

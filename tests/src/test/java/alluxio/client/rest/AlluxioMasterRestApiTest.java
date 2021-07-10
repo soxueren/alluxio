@@ -15,6 +15,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import alluxio.AlluxioURI;
+import alluxio.Constants;
 import alluxio.RuntimeConstants;
 import alluxio.client.file.FileSystemTestUtils;
 import alluxio.conf.PropertyKey;
@@ -95,7 +96,7 @@ public final class AlluxioMasterRestApiTest extends RestApiTest {
 
   @Test
   public void getCapacity() throws Exception {
-    long total = ServerConfiguration.getBytes(PropertyKey.WORKER_MEMORY_SIZE);
+    long total = ServerConfiguration.getBytes(PropertyKey.WORKER_RAMDISK_SIZE);
     Capacity capacity = getInfo(NO_PARAMS).getCapacity();
     assertEquals(total, capacity.getTotal());
     assertEquals(0, capacity.getUsed());
@@ -168,7 +169,7 @@ public final class AlluxioMasterRestApiTest extends RestApiTest {
 
   @Test
   public void getMountPoints() throws Exception {
-    Map<String, MountPointInfo> mountTable = mFileSystemMaster.getMountTable();
+    Map<String, MountPointInfo> mountTable = mFileSystemMaster.getMountPointInfoSummary();
     Map<String, MountPointInfo> mountPoints = getInfo(NO_PARAMS).getMountPoints();
     assertEquals(mountTable.size(), mountPoints.size());
     for (Map.Entry<String, MountPointInfo> mountPoint : mountTable.entrySet()) {
@@ -193,8 +194,8 @@ public final class AlluxioMasterRestApiTest extends RestApiTest {
 
   @Test
   public void getTierCapacity() throws Exception {
-    long total = ServerConfiguration.getBytes(PropertyKey.WORKER_MEMORY_SIZE);
-    Capacity capacity = getInfo(NO_PARAMS).getTierCapacity().get("MEM");
+    long total = ServerConfiguration.getBytes(PropertyKey.WORKER_RAMDISK_SIZE);
+    Capacity capacity = getInfo(NO_PARAMS).getTierCapacity().get(Constants.MEDIUM_MEM);
     assertEquals(total, capacity.getTotal());
     assertEquals(0, capacity.getUsed());
   }
@@ -221,7 +222,7 @@ public final class AlluxioMasterRestApiTest extends RestApiTest {
     assertEquals(1, workerInfos.size());
     WorkerInfo workerInfo = workerInfos.get(0);
     assertEquals(0, workerInfo.getUsedBytes());
-    long bytes = ServerConfiguration.getBytes(PropertyKey.WORKER_MEMORY_SIZE);
+    long bytes = ServerConfiguration.getBytes(PropertyKey.WORKER_RAMDISK_SIZE);
     assertEquals(bytes, workerInfo.getCapacityBytes());
   }
 

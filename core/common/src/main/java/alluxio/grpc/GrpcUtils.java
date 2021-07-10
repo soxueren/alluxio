@@ -35,6 +35,7 @@ import alluxio.wire.UfsInfo;
 import alluxio.wire.WorkerInfo;
 import alluxio.wire.WorkerNetAddress;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.common.net.HostAndPort;
 import com.google.protobuf.ByteString;
 
@@ -234,6 +235,7 @@ public final class GrpcUtils {
         .setBlockSizeBytes(pInfo.getBlockSizeBytes()).setCreationTimeMs(pInfo.getCreationTimeMs())
         .setCompleted(pInfo.getCompleted()).setFolder(pInfo.getFolder())
         .setPinned(pInfo.getPinned()).setCacheable(pInfo.getCacheable())
+        .setMediumTypes(ImmutableSet.copyOf(pInfo.getMediumTypeList()))
         .setPersisted(pInfo.getPersisted()).setBlockIds(pInfo.getBlockIdsList())
         .setLastModificationTimeMs(pInfo.getLastModificationTimeMs()).setTtl(pInfo.getTtl())
         .setLastAccessTimeMs(pInfo.getLastAccessTimeMs())
@@ -303,7 +305,9 @@ public final class GrpcUtils {
         .setUfsCapacityBytes(mountPointPInfo.getUfsCapacityBytes())
         .setUfsUsedBytes(mountPointPInfo.getUfsUsedBytes())
         .setReadOnly(mountPointPInfo.getReadOnly())
-        .setProperties(mountPointPInfo.getPropertiesMap()).setShared(mountPointPInfo.getShared());
+        .setProperties(mountPointPInfo.getPropertiesMap())
+        .setMountId(mountPointPInfo.getMountId())
+        .setShared(mountPointPInfo.getShared());
   }
 
   /**
@@ -495,6 +499,9 @@ public final class GrpcUtils {
         builder.putXattr(entry.getKey(), ByteString.copyFrom(entry.getValue()));
       }
     }
+    if (!fileInfo.getMediumTypes().isEmpty()) {
+      builder.addAllMediumType(fileInfo.getMediumTypes());
+    }
     return builder.build();
   }
 
@@ -562,7 +569,10 @@ public final class GrpcUtils {
     return alluxio.grpc.MountPointInfo.newBuilder().setUfsUri(info.getUfsUri())
         .setUfsType(info.getUfsType()).setUfsCapacityBytes(info.getUfsCapacityBytes())
         .setReadOnly(info.getReadOnly()).putAllProperties(info.getProperties())
-        .setShared(info.getShared()).build();
+        .setShared(info.getShared())
+        .setMountId(info.getMountId())
+        .setUfsUsedBytes(info.getUfsUsedBytes())
+        .build();
   }
 
   /**

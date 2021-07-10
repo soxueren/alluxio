@@ -15,10 +15,15 @@ set -e
 ALLUXIO_HOME="/opt/alluxio"
 NO_FORMAT='--no-format'
 FUSE_OPTS='--fuse-opts'
+MOUNT_POINT="${MOUNT_POINT:-/mnt/alluxio-fuse}"
+ALLUXIO_USERNAME="${ALLUXIO_USERNAME:-root}"
+ALLUXIO_GROUP="${ALLUXIO_GROUP:-root}"
+ALLUXIO_UID="${ALLUXIO_UID:-0}"
+ALLUXIO_GID="${ALLUXIO_GID:-0}"
 
 # List of environment variables which go in alluxio-env.sh instead of
 # alluxio-site.properties
-ALLUXIO_ENV_VARS=(
+declare -a ALLUXIO_ENV_VARS=(
   ALLUXIO_CLASSPATH
   ALLUXIO_HOSTNAME
   ALLUXIO_JARS
@@ -30,7 +35,10 @@ ALLUXIO_ENV_VARS=(
   ALLUXIO_WORKER_JAVA_OPTS
   ALLUXIO_JOB_MASTER_JAVA_OPTS
   ALLUXIO_JOB_WORKER_JAVA_OPTS
+  ALLUXIO_FUSE_JAVA_OPTS
 )
+declare -A ALLUXIO_ENV_MAP
+for key in "${!ALLUXIO_ENV_VARS[@]}"; do ALLUXIO_ENV_MAP[${ALLUXIO_ENV_VARS[$key]}]="$key"; done
 
 function printUsage {
   echo "Usage: COMMAND [COMMAND_OPTIONS]"
@@ -44,6 +52,7 @@ function printUsage {
   echo -e " job-worker                   \t Start Alluxio job worker"
   echo -e " proxy                        \t Start Alluxio proxy"
   echo -e " fuse [--fuse-opts=opt1,...]  \t Start Alluxio FUSE file system, option --fuse-opts expects a list of fuse options separated by comma"
+  echo -e " logserver                    \t Start Alluxio log server"
 }
 
 function writeConf {
@@ -52,7 +61,7 @@ function writeConf {
     # split around the first "="
     key=$(echo ${keyvaluepair} | cut -d= -f1)
     value=$(echo ${keyvaluepair} | cut -d= -f2-)
-    if [[ "${ALLUXIO_ENV_VARS[*]}" =~ "${key}" ]]; then
+    if [[ -n "${ALLUXIO_ENV_MAP[${key}]}" ]]; then
       echo "export ${key}=\"${value}\"" >> conf/alluxio-env.sh
     fi
   done
@@ -89,8 +98,10 @@ function mountAlluxioRootFSWithFuseOption {
   fi
 
   # Unmount first if cleanup failed and ignore error
-  ! integration/fuse/bin/alluxio-fuse unmount /alluxio-fuse
-  exec integration/fuse/bin/alluxio-fuse mount -n ${fuseOptions} /alluxio-fuse /
+  ! mkdir -p ${MOUNT_POINT}
+  ! umount ${MOUNT_POINT}
+  #! integration/fuse/bin/alluxio-fuse unmount ${MOUNT_POINT}
+  exec integration/fuse/bin/alluxio-fuse mount -n ${fuseOptions} ${MOUNT_POINT} /
 }
 
 # Sends a signal to each of the running background processes
@@ -135,6 +146,63 @@ function setup_signals {
   trap "forward_signal 1" EXIT
 }
 
+# Sets up if the non root is specified
+function setup_for_dynamic_non_root {
+  if [[ ${ALLUXIO_USERNAME} != "root" ]] && [[ ${ALLUXIO_GROUP} != "root" ]] && \
+    [[ ${ALLUXIO_UID} -ne 0 ]] && [[ ${ALLUXIO_GID} -ne 0 ]] && [[ $UID -eq 0 ]]; then
+      alp=$(cat /etc/issue|grep -i "Alpine"|wc -l)
+      if [ "$alp" == "1" ];then
+        addgroup -g ${ALLUXIO_GID} ${ALLUXIO_GROUP}
+        adduser -u ${ALLUXIO_UID}  -G ${ALLUXIO_GROUP} --disabled-password ${ALLUXIO_USERNAME}
+      else
+        groupadd -g ${ALLUXIO_GID} ${ALLUXIO_GROUP} && \
+        useradd -u ${ALLUXIO_UID} -g ${ALLUXIO_GROUP} ${ALLUXIO_USERNAME}
+      fi
+      usermod -a -G root ${ALLUXIO_USERNAME}
+      mkdir -p /journal
+      chown -R ${ALLUXIO_USERNAME}:${ALLUXIO_GROUP} /opt/* /journal
+      chmod -R g=u /opt/* /journal
+      # Chmod the dirs of tiered stores for alluxio worker
+      # to ensure write permission for non-root user.
+      if [[ -n "${ALLUXIO_RAM_FOLDER}" ]]; then
+        chmod -R 777 "${ALLUXIO_RAM_FOLDER}"
+      fi
+      if [[ "$1" == "worker" || "$1" == "worker-only" ]]; then
+        echo "${ALLUXIO_JAVA_OPTS} ${ALLUXIO_WORKER_JAVA_OPTS}" | \
+          tr ' ' '\n' | \
+          grep "alluxio.worker.tieredstore.level[0-9].dirs.path" | \
+          cut -d '=' -f 2 | \
+          tr ',' '\n' | \
+          grep -Ev "^$" | \
+          xargs -I {} chmod -R 777 {}
+      fi
+      exec su ${ALLUXIO_USERNAME} -c "/entrypoint.sh $*"
+  fi
+}
+
+#######################################
+# Sets the Alluxio ram folder if alluxio top tier is MEM and ram folder isn't explicitly configured.
+# Globals:
+#   ALLUXIO_JAVA_OPTS
+#   ALLUXIO_HOME
+#   ALLUXIO_WORKER_JAVA_OPTS
+# Arguments:
+#   None
+#######################################
+function set_ram_folder_if_needed {
+  local tier_alias=$("${ALLUXIO_HOME}"/bin/alluxio getConf alluxio.worker.tieredstore.level0.alias)
+  if [[ "${tier_alias}" != "MEM" ]]; then
+    # If the top tier is not MEM, skip setting ram folder
+    return
+  fi
+  local full_worker_opts="${ALLUXIO_JAVA_OPTS} ${ALLUXIO_WORKER_JAVA_OPTS}"
+  if [[ "${full_worker_opts}" != *"alluxio.worker.tieredstore.level0.dirs.path"* ]]; then
+    # Docker will set this tmpfs up by default. Its size is configurable through the
+    # --shm-size argument to docker run
+    export ALLUXIO_RAM_FOLDER=${ALLUXIO_RAM_FOLDER:-/dev/shm}
+  fi
+}
+
 function main {
   if [[ "$#" -lt 1 ]]; then
     printUsage
@@ -144,12 +212,9 @@ function main {
   local service="$1"
   OPTIONS="$2"
 
-  # Only set ALLUXIO_RAM_FOLDER if tiered storage isn't explicitly configured
-  if [[ -z "${ALLUXIO_WORKER_TIEREDSTORE_LEVEL0_DIRS_PATH}" ]]; then
-    # Docker will set this tmpfs up by default. Its size is configurable through the
-    # --shm-size argument to docker run
-    export ALLUXIO_RAM_FOLDER=${ALLUXIO_RAM_FOLDER:-/dev/shm}
-  fi
+  set_ram_folder_if_needed
+
+  setup_for_dynamic_non_root "$@"
 
   cd ${ALLUXIO_HOME}
 
@@ -187,6 +252,9 @@ function main {
       ;;
     fuse)
       mountAlluxioRootFSWithFuseOption
+      ;;
+    logserver)
+      processes+=("logserver")
       ;;
     *)
       printUsage

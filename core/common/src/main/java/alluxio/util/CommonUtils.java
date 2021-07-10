@@ -31,17 +31,20 @@ import com.google.protobuf.ByteString;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.netty.channel.Channel;
-import org.apache.commons.lang.ObjectUtils;
+import org.apache.commons.lang3.ObjectUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
@@ -62,6 +65,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 /**
@@ -74,6 +78,9 @@ public final class CommonUtils {
   private static final String ALPHANUM =
       "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
   private static final Random RANDOM = new Random();
+
+  private static final int JAVA_MAJOR_VERSION =
+      parseMajorVersion(System.getProperty("java.version"));
 
   /**
    * Convenience method for calling {@link #createProgressThread(long, PrintStream)} with an
@@ -113,7 +120,14 @@ public final class CommonUtils {
    * @return current time in milliseconds
    */
   public static long getCurrentMs() {
-    return System.currentTimeMillis();
+    return Instant.now().toEpochMilli();
+  }
+
+  /**
+   * @return the current jvm major version, 8 for java 1.8 or 11 for java 11
+   */
+  public static int getJavaVersion() {
+    return JAVA_MAJOR_VERSION;
   }
 
   /**
@@ -291,7 +305,7 @@ public final class CommonUtils {
       result = ShellUtils.execCommand(ShellUtils.getGroupsForUserCommand(user));
     } catch (ExitCodeException e) {
       // if we didn't get the group - just return empty list
-      LOG.warn("got exception trying to get groups for user " + user + ": " + e.getMessage());
+      LOG.warn("got exception trying to get groups for user {}: {}", user, e.toString());
       return groups;
     }
 
@@ -360,11 +374,11 @@ public final class CommonUtils {
                                     Function<T, Boolean> condition, WaitForOptions options)
       throws TimeoutException, InterruptedException {
     T value;
-    long start = System.currentTimeMillis();
+    long start = getCurrentMs();
     int interval = options.getInterval();
     int timeout = options.getTimeoutMs();
     while (condition.apply(value = objectSupplier.get()) != true) {
-      if (timeout != WaitForOptions.NEVER && System.currentTimeMillis() - start > timeout) {
+      if (timeout != WaitForOptions.NEVER && getCurrentMs() - start > timeout) {
         throw new TimeoutException("Timed out waiting for " + description + " options: " + options
             + " last value: " + ObjectUtils.toString(value));
       }
@@ -452,8 +466,9 @@ public final class CommonUtils {
    *
    * @param mapping the "key=value" mapping in string format separated by ";"
    * @param key the key to query
-   * @return the mapped value if the key exists, otherwise returns ""
+   * @return the mapped value if the key exists, otherwise returns null
    */
+  @Nullable
   public static String getValueFromStaticMapping(String mapping, String key) {
     Map<String, String> m = Splitter.on(";")
         .omitEmptyStrings()
@@ -557,7 +572,7 @@ public final class CommonUtils {
    */
   public static <T> void invokeAll(ExecutorService service, List<Callable<T>> callables,
       long timeoutMs) throws TimeoutException, ExecutionException {
-    long endMs = System.currentTimeMillis() + timeoutMs;
+    long endMs = getCurrentMs() + timeoutMs;
     List<Future<T>> pending = new ArrayList<>();
     for (Callable<T> c : callables) {
       pending.add(service.submit(c));
@@ -587,7 +602,7 @@ public final class CommonUtils {
       if (pending.isEmpty()) {
         break;
       }
-      long remainingMs = endMs - System.currentTimeMillis();
+      long remainingMs = endMs - getCurrentMs();
       if (remainingMs <= 0) {
         // Cancel the pending futures
         for (Future<T> future : pending) {
@@ -816,14 +831,56 @@ public final class CommonUtils {
    *
    * @param hostname host name of the network address
    * @param port port of the network address
+   * @param timeoutMs duration to attempt connection before returning false
    * @return whether the network address is reachable
    */
-  public static boolean isAddressReachable(String hostname, int port) {
-    try (Socket socket = new Socket(hostname, port)) {
+  public static boolean isAddressReachable(String hostname, int port, int timeoutMs) {
+    try (Socket socket = new Socket()) {
+      socket.connect(new InetSocketAddress(hostname, port), timeoutMs);
       return true;
     } catch (IOException e) {
       return false;
     }
+  }
+
+  /**
+   * Recursively lists a local dir and all its subdirs and return all the files.
+   *
+   * @param dir the directory
+   * @return a list of all the files
+   * */
+  public static List<File> recursiveListLocalDir(File dir) {
+    File[] files = dir.listFiles();
+    // File#listFiles can return null when the path is invalid
+    if (files == null) {
+      return Collections.emptyList();
+    }
+    List<File> result = new ArrayList<>(files.length);
+    for (File f : files) {
+      if (f.isDirectory()) {
+        result.addAll(recursiveListLocalDir(f));
+        continue;
+      }
+      result.add(f);
+    }
+    return result;
+  }
+
+  /**
+   * @param version the version string of the JVMgi
+   * @return the major version of the current JVM, 8 for 1.8, 11 for java 11
+   * see https://www.oracle.com/java/technologies/javase/versioning-naming.html for reference
+   */
+  public static int parseMajorVersion(String version) {
+    if (version.startsWith("1.")) {
+      version = version.substring(2, 3);
+    } else {
+      int dot = version.indexOf(".");
+      if (dot != -1) {
+        version = version.substring(0, dot);
+      }
+    }
+    return Integer.parseInt(version);
   }
 
   private CommonUtils() {} // prevent instantiation

@@ -15,9 +15,16 @@ import React from 'react';
 import { connect } from 'react-redux';
 import { Redirect, Route, Switch } from 'react-router-dom';
 import { AnyAction, compose, Dispatch } from 'redux';
-import { Footer, withErrors, withLoadingMessage, Header, withFetchData } from '@alluxio/common-ui/src/components';
+import {
+  Footer,
+  withErrors,
+  withLoadingMessage,
+  Header,
+  withFetchData,
+  SlackButton,
+} from '@alluxio/common-ui/src/components';
 import { triggerRefresh } from '@alluxio/common-ui/src/store/refresh/actions';
-import { Browse, Configuration, Data, MasterLogs, Metrics, Overview, Workers } from '..';
+import { Browse, Configuration, Data, MasterLogs, Metrics, Overview, Workers, MountTable } from '..';
 import { footerNavigationData, headerNavigationData, routePaths } from '../../constants';
 import { IApplicationState } from '../../store';
 import { fetchRequest } from '../../store/init/actions';
@@ -78,12 +85,14 @@ export class App extends React.Component<AllProps> {
               <Route path={routePaths.logs} exact={true} render={this.renderView(MasterLogs, { history })} />
               <Route path={routePaths.metrics} exact={true} render={this.renderView(Metrics)} />
               <Route path={routePaths.workers} exact={true} render={this.renderView(Workers)} />
+              <Route path={routePaths.mounttable} exact={true} render={this.renderView(MountTable)} />
               <Route render={this.redirectToOverview} />
             </Switch>
           </div>
           <div className="w-100 footer-wrapper">
             <Footer data={footerNavigationData} />
           </div>
+          <SlackButton />
         </div>
       </ConnectedRouter>
     );

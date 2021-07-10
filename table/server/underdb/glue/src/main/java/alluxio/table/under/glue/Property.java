@@ -142,11 +142,17 @@ public class Property extends UdbProperty {
           .setDescription("The maximum number of connection to glue metastore.")
           .build();
 
+  public static final Property MAX_GLUE_FETCH_PARTITIONS =
+      new Builder(Name.MAX_GLUE_FETCH_PARTITIONS)
+          .setDefaultValue("512")
+          .setDescription("The maximum number of partitions to return in a single response.")
+          .build();
+
   public static final Property GLUE_REGION =
       new Builder(Name.GLUE_REGION)
-        .setDefaultValue("")
-        .setDescription("The regional endpoint for client service calls.")
-        .build();
+          .setDefaultValue("")
+          .setDescription("The regional endpoint for client service calls.")
+          .build();
 
   // TODO(shouwei): check the necessity of catalogid
   public static final Property CATALOG_ID =
@@ -157,15 +163,57 @@ public class Property extends UdbProperty {
 
   public static final Property AWS_GLUE_ACCESS_KEY =
       new Builder(Name.AWS_GLUE_ACCESS_KEY)
-        .setDefaultValue("")
-        .setDescription("The access key to access the aws glue.")
-        .build();
+          .setDefaultValue("")
+          .setDescription("The access key to access the aws glue.")
+          .build();
 
   public static final Property AWS_GLUE_SECRET_KEY =
       new Builder(Name.AWS_GLUE_SECRET_KEY)
-        .setDefaultValue("")
-        .setDescription("The secret key to access the aws glue.")
-        .build();
+          .setDefaultValue("")
+          .setDescription("The secret key to access the aws glue.")
+          .build();
+
+  public static final Property AWS_PROXY_PROTOCOL =
+      new Builder(Name.AWS_PROXY_PROTOCOL)
+          .setDefaultValue("HTTP")
+          .setDescription("The Protocol to use for connecting to the proxy.")
+          .build();
+
+  public static final Property AWS_PROXY_HOST =
+      new Builder(Name.AWS_PROXY_HOST)
+          .setDefaultValue("")
+          .setDescription("The proxy host the client will connect through.")
+          .build();
+
+  public static final Property AWS_PROXY_PORT =
+      new Builder(Name.AWS_PROXY_PORT)
+          .setDefaultValue("")
+          .setDescription("The proxy port the client will connect through.")
+          .build();
+
+  public static final Property AWS_PROXY_USER_NAME =
+      new Builder(Name.AWS_PROXY_USER_NAME)
+          .setDefaultValue("")
+          .setDescription("The proxy user name.")
+          .build();
+
+  public static final Property AWS_PROXY_PASSWORD =
+      new Builder(Name.AWS_PROXY_PASSWORD)
+          .setDefaultValue("")
+          .setDescription("The proxy password.")
+          .build();
+
+  public static final Property TABLE_COLUMN_STATISTICS_ENABLE =
+      new Builder(Name.TABLE_COLUMN_STATISTICS_ENABLE)
+          .setDefaultValue("false")
+          .setDescription("Enable Glue table column statistics.")
+          .build();
+
+  public static final Property PARTITION_COLUMN_STATISTICS_ENABLE =
+      new Builder(Name.PARTITION_COLUMN_STATISTICS_ENABLE)
+          .setDefaultValue("false")
+          .setDescription("Enable Glue partition column statistics.")
+          .build();
 
   /**
    * @return the name of alluxio.table.under.glue.Property
@@ -197,9 +245,17 @@ public class Property extends UdbProperty {
   public static final class Name {
     // AWS Glue related properties
     public static final String MAX_GLUE_CONNECTION = "max.connection";
+    public static final String MAX_GLUE_FETCH_PARTITIONS = "partitions.fetch.max";
     public static final String GLUE_REGION = "aws.region";
     public static final String CATALOG_ID = "aws.catalog.id";
     public static final String AWS_GLUE_ACCESS_KEY = "aws.accesskey";
     public static final String AWS_GLUE_SECRET_KEY = "aws.secretkey";
+    public static final String AWS_PROXY_PROTOCOL = "aws.proxy.protocol";
+    public static final String AWS_PROXY_HOST = "aws.proxy.host";
+    public static final String AWS_PROXY_PORT = "aws.proxy.port";
+    public static final String AWS_PROXY_USER_NAME = "aws.proxy.username";
+    public static final String AWS_PROXY_PASSWORD = "aws.proxy.password";
+    public static final String TABLE_COLUMN_STATISTICS_ENABLE = "table.column.statistics";
+    public static final String PARTITION_COLUMN_STATISTICS_ENABLE = "partition.column.statistics";
   }
 }

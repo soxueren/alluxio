@@ -13,6 +13,7 @@ import { LineSerieData } from '@nivo/line';
 import { AxiosResponse } from 'axios';
 
 import { ICounter } from '@alluxio/common-ui/src/constants';
+import { IJournalDiskInfo } from '../../constants/types/IJournalDiskInfo';
 
 export interface IMetrics {
   cacheHitLocal: string;
@@ -26,6 +27,9 @@ export interface IMetrics {
     [key: string]: ICounter;
   };
   timeSeriesMetrics: LineSerieData[];
+  journalDiskMetrics: IJournalDiskInfo[];
+  journalLastCheckpointTime: string;
+  journalEntriesSinceCheckpoint: number;
   totalBytesReadLocal: string;
   totalBytesReadLocalThroughput: string;
   totalBytesReadDomainSocket: string;
@@ -36,13 +40,18 @@ export interface IMetrics {
   totalBytesReadUfsThroughput: string;
   totalBytesWrittenLocal: string;
   totalBytesWrittenLocalThroughput: string;
-  totalBytesWrittenAlluxio: string;
-  totalBytesWrittenAlluxioThroughput: string;
+  totalBytesWrittenRemote: string;
+  totalBytesWrittenRemoteThroughput: string;
   totalBytesWrittenDomainSocket: string;
   totalBytesWrittenDomainSocketThroughput: string;
   totalBytesWrittenUfs: string;
   totalBytesWrittenUfsThroughput: string;
   ufsOps: {
+    [key: string]: {
+      [key: string]: number;
+    };
+  };
+  ufsOpsSaved: {
     [key: string]: {
       [key: string]: number;
     };

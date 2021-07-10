@@ -36,6 +36,15 @@ spec:
         release: {{ .Release.Name }}
         heritage: {{ .Release.Service }}
         role: alluxio-fuse-client
+    {{- if or .Values.fuse.podAnnotations .Values.metrics.enabled }}
+      annotations:
+      {{- with .Values.fuse.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.metrics.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
     spec:
       containers:
         - name: alluxio-fuse-client
@@ -51,11 +60,11 @@ spec:
           args: ["while true; do sleep 30 && echo .; done;"]
           volumeMounts:
             - name: alluxio-fuse-mount
-              mountPath: /alluxio-fuse
+              mountPath: {{ .Values.fuse.mountPath | dir }}
       restartPolicy: Always
       volumes:
         - name: alluxio-fuse-mount
           hostPath:
-            path: /alluxio-fuse
+            path: {{ .Values.fuse.mountPath | dir }}
             type: Directory
 {{- end }}

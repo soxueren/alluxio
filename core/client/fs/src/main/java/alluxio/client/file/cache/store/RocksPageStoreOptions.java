@@ -22,6 +22,11 @@ import org.rocksdb.CompressionType;
  * Options used to instantiate {@link RocksPageStore}.
  */
 public class RocksPageStoreOptions extends PageStoreOptions {
+  // TODO(feng): consider making the overhead ratio configurable
+  // We assume 20% overhead using Rocksdb as a page store, i.e., with 1GB space allocated, we
+  // expect no more than 1024MB/(1+20%)=853MB logical data stored
+  private static final double ROCKS_OVERHEAD_RATIO = 0.2;
+
   /** The max page size that can be stored. */
   private int mMaxPageSize;
 
@@ -43,6 +48,7 @@ public class RocksPageStoreOptions extends PageStoreOptions {
     mWriteBufferSize = 64 * Constants.MB;
     mMaxBufferPoolSize = 32;
     mCompressionType = CompressionType.NO_COMPRESSION;
+    mOverheadRatio = ROCKS_OVERHEAD_RATIO;
   }
 
   /**
@@ -130,14 +136,17 @@ public class RocksPageStoreOptions extends PageStoreOptions {
   @Override
   public String toString() {
     return MoreObjects.toStringHelper(this)
-        .add("MaxPageSize", mMaxPageSize)
-        .add("WriteBufferSize", mWriteBufferSize)
-        .add("MaxBufferPoolSize", mMaxBufferPoolSize)
-        .add("CompressionType", mCompressionType)
-        .add("RootDir", mRootDir)
-        .add("PageSize", mPageSize)
-        .add("CacheSize", mCacheSize)
         .add("AlluxioVersion", mAlluxioVersion)
+        .add("CacheSize", mCacheSize)
+        .add("CompressionType", mCompressionType)
+        .add("MaxBufferPoolSize", mMaxBufferPoolSize)
+        .add("MaxPageSize", mMaxPageSize)
+        .add("OverheadRatio", mOverheadRatio)
+        .add("PageSize", mPageSize)
+        .add("RootDir", mRootDir)
+        .add("TimeoutDuration", mTimeoutDuration)
+        .add("TimeoutThreads", mTimeoutThreads)
+        .add("WriteBufferSize", mWriteBufferSize)
         .toString();
   }
 }

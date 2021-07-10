@@ -19,12 +19,12 @@ efficient than reading from a different worker on `host2`.
 Similarly, reading from a worker on the same rack, or in the same availability zone,
 or in the same data center is faster than reading
 from a worker on a different rack, different availability zone, or different data center.
-Tiered locality allows users to take advantage of various levels of locality by configuring
+Tiered locality allows users to take advantage of various locality levels by configuring
 servers and clients with network topology information.
 
 ## Tiered Identity
 
-To indicate different levels of locality, one can assign an Alluxio
+To indicate different locality levels, one can assign an Alluxio
 master, worker, or client with a *Tiered Identity*.
 This identity is an address tuple in the format **`(tierName1=value1, tierName2=value2, ...)`**
 where each entry **`tierName1=value1`** is called a *locality tier*.
@@ -58,7 +58,7 @@ alluxio.locality.node=host1
 alluxio.locality.rack=rack2
 ```
 
-This will assign this worker a tiered identity of `(node=host1, rack=rack2)`.
+These configurations will assign this worker a tiered identity of `(node=host1, rack=rack2)`.
 
 To verify that the configuration is working, check the
 [master, worker, and application logs]({{ '/en/operation/Basic-Logging.html' | relativize_url }}#log-location).
@@ -69,7 +69,7 @@ INFO  TieredIdentityFactory - Initialized tiered identity TieredIdentity(node=ho
 ```
 
 If the log entry does not appear, try running the locality script directly to check its output and
-ensure it is executable by the user that luanched the Alluxio server.
+ensure it is executable by the user that launched the Alluxio server.
 
 ## Advanced
 
@@ -94,7 +94,7 @@ If other locality tiers are left unset, they will not be used to inform locality
 #### Option A: shell script
 
 By default, Alluxio clients and servers search the classpath for a script named `alluxio-locality.sh`.
-Output format of this script is a comma-separated list of `tierName=tierValue` pairs.
+The output format of this script is a comma-separated list of `tierName=tierValue` pairs.
 
 For example, suppose Alluxio workers are spread across multiple availability zones within EC2.
 To configure tiered locality with availability zones:
@@ -153,10 +153,10 @@ obtaining its value, from highest priority to lowest priority, is as follows:
 1. From `node=...` in the output of the script, whose name is configured by
 `alluxio.locality.script`
 
-In order to supply a default value for a particular `node` tier, above list is followed by two more
+In order to supply a default value for a particular `node` tier, the above list is followed by two more
 sources, from highest to lowest priority:
 
 1. From `alluxio.worker.hostname` on a worker, `alluxio.master.hostname` on a master, or
 `alluxio.user.hostname` on a client in their respective `alluxio-site.properties`
 
-1. If none of the above are configured, node locality is determined by hostname lookup
+1. If none of the above configurations are set, node locality is determined by hostname lookup

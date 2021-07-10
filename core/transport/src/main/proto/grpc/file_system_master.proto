@@ -36,6 +36,17 @@ message FileSystemMasterCommonPOptions {
   optional grpc.TtlAction ttlAction = 3;
 }
 
+message CheckAccessPRequest {
+  optional string path = 1;
+  optional CheckAccessPOptions options = 2;
+}
+
+message CheckAccessPResponse {}
+message CheckAccessPOptions {
+  optional Bits bits = 1;
+  optional FileSystemMasterCommonPOptions commonOptions = 2;
+}
+
 message CheckConsistencyPResponse {
   repeated string inconsistentPaths = 1;
 }
@@ -184,6 +195,8 @@ message ListStatusPOptions {
   optional LoadMetadataPType loadMetadataType = 2;
   optional FileSystemMasterCommonPOptions commonOptions = 3;
   optional bool recursive = 4;
+  // No data will be transferred.
+  optional bool loadMetadataOnly = 5;
 }
 message ListStatusPRequest {
   /** the path of the file or directory */
@@ -197,6 +210,7 @@ message LoadMetadataPOptions {
   optional bool createAncestors = 2;
   optional fscommon.LoadDescendantPType loadDescendantType = 3;
   optional FileSystemMasterCommonPOptions commonOptions = 4;
+  optional LoadMetadataPType loadType = 5;
 }
 
 enum PAclEntryType {
@@ -274,6 +288,7 @@ message FileInfo {
   optional int32 replicationMin = 30;
   optional int64 lastAccessTimeMs = 31;
   map<string, bytes> xattr = 32;
+  repeated string mediumType = 33;
 }
 
 message GetFilePathPResponse {
@@ -311,6 +326,7 @@ message MountPointInfo {
   optional bool readOnly = 5;
   map<string, string> properties = 6;
   optional bool shared = 7;
+  optional int64 mountId = 8;
 }
 
 message FileSystemCommandOptions {
@@ -462,10 +478,24 @@ message UpdateUfsModePRequest {
   optional UpdateUfsModePOptions options = 2;
 }
 
+message GetStateLockHoldersPResponse {
+  repeated string threads = 1;
+}
+message GetStateLockHoldersPOptions {}
+message GetStateLockHoldersPRequest {
+  optional GetStateLockHoldersPOptions options = 1;
+}
+
+
 /**
  * This interface contains file system master service endpoints for Alluxio clients.
  */
 service FileSystemMasterClientService {
+
+  /**
+   * Checks access to path.
+   */
+  rpc CheckAccess(CheckAccessPRequest) returns (CheckAccessPResponse);
 
   /**
    * Checks the consistency of the files and directores with the path as the root of the subtree
@@ -586,6 +616,8 @@ service FileSystemMasterClientService {
    * Updates the ufs mode for a ufs path under one or more mount points.
    */
   rpc UpdateUfsMode(UpdateUfsModePRequest) returns (UpdateUfsModePResponse);
+
+  rpc GetStateLockHolders(GetStateLockHoldersPRequest) returns (GetStateLockHoldersPResponse);
 }
 
 message FileSystemHeartbeatPResponse {

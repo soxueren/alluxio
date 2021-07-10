@@ -17,6 +17,7 @@ import alluxio.exception.status.UnavailableException;
 import alluxio.master.journal.Journal;
 import alluxio.master.journal.JournalContext;
 import alluxio.master.journal.StateChangeJournalContext;
+import alluxio.resource.LockResource;
 import alluxio.util.executor.ExecutorServiceFactory;
 
 import com.google.common.base.Preconditions;
@@ -66,10 +67,10 @@ public abstract class AbstractMaster implements Master {
   protected AbstractMaster(MasterContext masterContext, Clock clock,
       ExecutorServiceFactory executorServiceFactory) {
     Preconditions.checkNotNull(masterContext, "masterContext");
-    mJournal = masterContext.getJournalSystem().createJournal(this);
     mMasterContext = masterContext;
     mClock = clock;
     mExecutorServiceFactory = executorServiceFactory;
+    mJournal = masterContext.getJournalSystem().createJournal(this);
   }
 
   @Override
@@ -135,12 +136,24 @@ public abstract class AbstractMaster implements Master {
   public JournalContext createJournalContext() throws UnavailableException {
     // Use the state change lock for the journal context, since all modifications to journaled
     // state must happen inside of a journal context.
-    return new StateChangeJournalContext(mJournal.createJournalContext(),
-        mMasterContext.stateChangeLock());
+    LockResource sharedLockResource;
+    try {
+      sharedLockResource = mMasterContext.getStateLockManager().lockShared();
+    } catch (InterruptedException e) {
+      throw new UnavailableException(
+          "Failed to acquire state-lock due to ongoing backup activity.");
+    }
+
+    return new StateChangeJournalContext(mJournal.createJournalContext(), sharedLockResource);
   }
 
   @Override
   public void close() throws IOException {
     stop();
+  }
+
+  @Override
+  public MasterContext getMasterContext() {
+    return mMasterContext;
   }
 }

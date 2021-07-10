@@ -25,6 +25,7 @@ import alluxio.master.journal.JournalEntryIterable;
 import alluxio.master.journal.Journaled;
 import alluxio.master.journal.checkpoint.CheckpointName;
 import alluxio.proto.journal.Journal;
+import alluxio.resource.CloseableIterator;
 import alluxio.resource.LockResource;
 import alluxio.table.common.Layout;
 import alluxio.table.common.LayoutRegistry;
@@ -34,7 +35,6 @@ import alluxio.table.common.udb.UdbContext;
 import alluxio.table.common.udb.UnderDatabaseRegistry;
 import alluxio.util.StreamUtils;
 
-import com.google.common.collect.Iterators;
 import com.google.common.collect.Maps;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -129,6 +129,8 @@ public class AlluxioCatalog implements Journaled {
       } catch (Exception e) {
         // Failed to connect to and sync the udb.
         syncError = true;
+        // log the error and stack
+        LOG.error(String.format("Sync (during attach) failed for db '%s'.", dbName), e);
         throw new IOException(String
             .format("Failed to connect underDb for Alluxio db '%s': %s", dbName,
                 e.getMessage()), e);
@@ -153,6 +155,11 @@ public class AlluxioCatalog implements Journaled {
     try (LockResource l = getDbLock(dbName)) {
       Database db = getDatabaseByName(dbName);
       return db.sync(journalContext);
+    } catch (Exception e) {
+      // log the error and stack
+      LOG.error(String.format("Sync failed for db '%s'.", dbName), e);
+      throw new IOException(
+          String.format("Sync failed for db '%s'. error: %s", dbName, e.getMessage()), e);
     }
   }
 
@@ -209,7 +216,7 @@ public class AlluxioCatalog implements Journaled {
    * @param dbName database name
    * @return a database object
    */
-  public alluxio.grpc.table.Database getDatabase(String dbName)  throws IOException {
+  public alluxio.grpc.table.Database getDatabase(String dbName) throws IOException {
     Database db = getDatabaseByName(dbName);
     DatabaseInfo dbInfo = db.getDatabaseInfo();
 
@@ -390,6 +397,12 @@ public class AlluxioCatalog implements Journaled {
     } else if (entry.hasAddTable()) {
       Database db = mDBs.get(entry.getAddTable().getDbName());
       return db.processJournalEntry(entry);
+    } else if (entry.hasAddTablePartitions()) {
+      Database db = mDBs.get(entry.getAddTablePartitions().getDbName());
+      return db.processJournalEntry(entry);
+    } else if (entry.hasRemoveTable()) {
+      Database db = mDBs.get(entry.getRemoveTable().getDbName());
+      return db.processJournalEntry(entry);
     } else if (entry.hasDetachDb()) {
       apply(entry.getDetachDb());
       return true;
@@ -450,11 +463,12 @@ public class AlluxioCatalog implements Journaled {
   }
 
   @Override
-  public Iterator<Journal.JournalEntry> getJournalEntryIterator() {
-    List<Iterator<Journal.JournalEntry>> componentIters = StreamUtils
+  public CloseableIterator<Journal.JournalEntry> getJournalEntryIterator() {
+    List<CloseableIterator<Journal.JournalEntry>> componentIters = StreamUtils
         .map(JournalEntryIterable::getJournalEntryIterator, mDBs.values());
 
-    return Iterators.concat(getDbIterator(), Iterators.concat(componentIters.iterator()));
+    return CloseableIterator.concat(
+        CloseableIterator.noopCloseable(getDbIterator()), CloseableIterator.concat(componentIters));
   }
 
   @Override

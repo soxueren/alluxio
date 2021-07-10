@@ -16,8 +16,9 @@ function printUsage {
   echo "COMMAND is one of:"
   echo -e "  extensions    \t Manage extensions to core Alluxio"
   echo -e "  format [-s]   \t Format Alluxio master and all workers (if -s specified, only format if underfs is local and doesn't already exist)"
-  echo -e "  formatMaster  \t Format Alluxio master"
-  echo -e "  formatWorker  \t Format Alluxio worker storage"
+  echo -e "  formatJournal \t Format Alluxio master journal locally"
+  echo -e "  formatMasters \t Format Alluxio master nodes"
+  echo -e "  formatWorker  \t Format Alluxio worker nodes"
   echo -e "  bootstrapConf \t Generate a config file if one doesn't exist"
   echo -e "  fs            \t Command line tool for interacting with the Alluxio filesystem."
   echo -e "  fsadmin       \t Command line tool for use by Alluxio filesystem admins."
@@ -28,11 +29,14 @@ function printUsage {
   echo -e "  runClass      \t Run the main method of an Alluxio class."
   echo -e "  runTest       \t Run an end-to-end test on an Alluxio cluster."
   echo -e "  runTests      \t Run all end-to-end tests on an Alluxio cluster."
+  echo -e "  runHmsTests   \t Test the integration between Alluxio and the target hive metastore. Try 'alluxio runHmsTests -h' for more help."
+  echo -e "                \t NOTE: This command requires valid hive metastore uris to run tests against."
+  echo -e "  runHdfsMountTests\t Test the integration between Alluxio and the target HDFS path. "
   echo -e "  runJournalCrashTest\t Test the Master Journal System in a crash scenario. Try 'alluxio runJournalCrashTest -help' for more help."
   echo -e "                \t NOTE: This command will stop the existing server and creates a new one!"
-  echo -e "  runMesosTest  \t Test the Alluxio integration with Mesos. Try 'alluxio mesosTest -help' for more help."
-  echo -e "                \t NOTE: This command requires Mesos to be running and will stop any Alluxio servers that are currently running."
-  echo -e "  runUfsTests    \t Test the integration between Alluxio and the target under filesystem. Try 'alluxio runUfsTests -help' for more help."
+  echo -e "  runUfsIOTest  \t Test the Alluxio throughput to the UFS path. Try 'alluxio runUfsIOTest -help' for more help."
+  echo -e "                \t NOTE: This command requires a valid ufs path to write temporary files into."
+  echo -e "  runUfsTests   \t Test the integration between Alluxio and the target under filesystem. Try 'alluxio runUfsTests -help' for more help."
   echo -e "                \t NOTE: This command requires a valid ufs path to run tests against."
   echo -e "  readJournal   \t Read an Alluxio journal file from stdin and write a human-readable version of it to stdout."
   echo -e "  upgradeJournal\t Upgrade an Alluxio journal version 0 (Alluxio version < 1.5.0) to an Alluxio journal version 1 (Alluxio version >= 1.5.0)."
@@ -56,7 +60,7 @@ function bootstrapConf {
   local usage="Usage: $0 bootstrapConf <alluxio_master_hostname>"
   if [[ $# -lt 1 ]]; then
     echo ${usage} >&2
-    exit 1
+    exit 2
   fi
   local master=${1}
 
@@ -76,8 +80,8 @@ EOF
 
 function killAll {
   if [[ $# -ne 1 ]]; then
-    echo "Usage: alluxio killAll <WORD>"
-    exit
+    echo "Usage: alluxio killAll <WORD>" >&2
+    exit 2
   fi
 
   keyword=$1
@@ -93,7 +97,7 @@ function killAll {
         sleep 1
       else
         # waited long enough, kill the process
-        echo "Process did not complete after "${maxWait}" seconds, killing."
+        echo "Process did not complete after "${maxWait}" seconds, killing." >&2
         kill -9 ${pid} 2> /dev/null
       fi
     done
@@ -105,7 +109,7 @@ function killAll {
 function copyDir {
   if [[ $# -ne 1 ]]; then
     echo "Usage: alluxio copyDir <path>" >&2
-    exit 1
+    exit 2
   fi
 
   ABS_PATH_COMMAND="readlink -f"
@@ -219,11 +223,11 @@ function main {
           shift # remove -s param
         fi
       else
-        echo "${Usage} $0 format [-s]"
+        echo "Usage: alluxio format [-s]" >&2
         exit 2
       fi
     elif [[ $# -gt 1 ]]; then
-      echo "${Usage} $0 format [-s]"
+      echo "Usage: alluxio format [-s]" >&2
       exit 2
     fi
 
@@ -243,7 +247,7 @@ function main {
     formatJournal
   ;;
   "formatMaster")
-    echo "formatMaster is deprecated - use formatMasters instead"
+    echo "formatMaster is deprecated - use formatJournal or formatMasters instead"
     formatJournal
   ;;
   "formatMasters")
@@ -309,6 +313,17 @@ function main {
     ALLUXIO_SHELL_JAVA_OPTS+=" -Dalluxio.logger.type=Console"
     runJavaClass "$@"
     ;;
+  "runHmsTests")
+    CLASS="alluxio.cli.HmsTests"
+    CLASSPATH=${ALLUXIO_CLIENT_CLASSPATH}
+    runJavaClass "$@"
+  ;;
+  "runHdfsMountTests")
+    CLASS="alluxio.cli.ValidateHdfsMount"
+    CLASSPATH=${ALLUXIO_CLIENT_CLASSPATH}
+    ALLUXIO_SHELL_JAVA_OPTS+=" -Dalluxio.logger.type=Console"
+    runJavaClass "$@"
+  ;;
   "runJournalCrashTest")
     CLASS="alluxio.cli.JournalCrashTest"
     CLASSPATH=${ALLUXIO_CLIENT_CLASSPATH}
@@ -319,6 +334,11 @@ function main {
     CLASS="alluxio.cli.AlluxioFrameworkIntegrationTest"
     CLASSPATH=${ALLUXIO_CLIENT_CLASSPATH}
     ALLUXIO_SHELL_JAVA_OPTS+=" -Dalluxio.logger.type=Console"
+    runJavaClass "$@"
+  ;;
+  "runUfsIOTest")
+    CLASS="alluxio.stress.cli.UfsIOBench"
+    CLASSPATH=${ALLUXIO_CLIENT_CLASSPATH}
     runJavaClass "$@"
   ;;
   "runUfsTests")

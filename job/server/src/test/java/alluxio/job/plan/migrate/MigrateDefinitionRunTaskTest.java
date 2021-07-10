@@ -11,8 +11,10 @@
 
 package alluxio.job.plan.migrate;
 
+import static junit.framework.TestCase.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -27,6 +29,8 @@ import alluxio.client.file.MockFileInStream;
 import alluxio.client.file.MockFileOutStream;
 import alluxio.client.file.URIStatus;
 import alluxio.conf.AlluxioConfiguration;
+import alluxio.exception.FileAlreadyExistsException;
+import alluxio.exception.FileDoesNotExistException;
 import alluxio.grpc.CreateFilePOptions;
 import alluxio.grpc.DeletePOptions;
 import alluxio.grpc.OpenFilePOptions;
@@ -42,25 +46,18 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
-import org.junit.runners.Parameterized.Parameter;
-import org.junit.runners.Parameterized.Parameters;
 import org.mockito.Matchers;
 import org.mockito.Mockito;
 import org.powermock.api.mockito.PowerMockito;
 import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
-import org.powermock.modules.junit4.PowerMockRunnerDelegate;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Unit tests for {@link MigrateDefinition#runTask(MigrateConfig, ArrayList, RunTaskContext)}.
+ * Unit tests for {@link MigrateDefinition#runTask(MigrateConfig, MigrateCommand, RunTaskContext)}.
  */
 @RunWith(PowerMockRunner.class)
-@PowerMockRunnerDelegate(Parameterized.class)
 @PrepareForTest({FileSystemContext.class})
 public final class MigrateDefinitionRunTaskTest {
   private static final String TEST_DIR = "/DIR";
@@ -73,14 +70,6 @@ public final class MigrateDefinitionRunTaskTest {
   private MockFileInStream mMockInStream;
   private MockFileOutStream mMockOutStream;
   private UfsManager mMockUfsManager;
-
-  @Parameters
-  public static Collection<Object[]> data() {
-    return Arrays.asList(new Object[][] { {true}, {false} });
-  }
-
-  @Parameter
-  public boolean mDeleteSource;
 
   @Before
   public void before() throws Exception {
@@ -102,18 +91,11 @@ public final class MigrateDefinitionRunTaskTest {
 
   /**
    * Tests that the bytes of the file to migrate are written to the destination stream.
-   * When deleteSource is true, the source is deleted, otherwise, it is kept.
    */
   @Test
   public void basicMigrateTest() throws Exception {
     runTask(TEST_SOURCE, TEST_SOURCE, TEST_DESTINATION, WriteType.THROUGH);
     Assert.assertArrayEquals(TEST_SOURCE_CONTENTS, mMockOutStream.toByteArray());
-    if (mDeleteSource) {
-      DeletePOptions options = DeletePOptions.newBuilder().setUnchecked(true).build();
-      verify(mMockFileSystem).delete(new AlluxioURI(TEST_SOURCE), options);
-    } else {
-      verify(mMockFileSystem, never()).delete(eq(new AlluxioURI(TEST_SOURCE)), any());
-    }
   }
 
   /**
@@ -126,11 +108,6 @@ public final class MigrateDefinitionRunTaskTest {
     when(mMockFileSystem.listStatus(new AlluxioURI(TEST_DIR)))
         .thenReturn(Lists.newArrayList());
     runTask(TEST_DIR, TEST_SOURCE, TEST_DESTINATION, WriteType.THROUGH);
-    if (mDeleteSource) {
-      verify(mMockFileSystem).delete(eq(new AlluxioURI(TEST_DIR)), any(DeletePOptions.class));
-    } else {
-      verify(mMockFileSystem, never()).delete(new AlluxioURI(TEST_DIR));
-    }
   }
 
   /**
@@ -146,11 +123,6 @@ public final class MigrateDefinitionRunTaskTest {
     when(mMockFileSystem.listStatus(new AlluxioURI(inner)))
         .thenReturn(Lists.newArrayList());
     runTask(TEST_DIR, TEST_SOURCE, TEST_DESTINATION, WriteType.THROUGH);
-    if (mDeleteSource) {
-      verify(mMockFileSystem).delete(eq(new AlluxioURI(TEST_DIR)), any(DeletePOptions.class));
-    } else {
-      verify(mMockFileSystem, never()).delete(new AlluxioURI(TEST_DIR));
-    }
   }
 
   /**
@@ -192,14 +164,36 @@ public final class MigrateDefinitionRunTaskTest {
         .thenReturn(new URIStatus(fileInfo));
 
     runTask(TEST_SOURCE, TEST_SOURCE, TEST_DESTINATION, WriteType.ASYNC_THROUGH);
+  }
 
-    if (mDeleteSource) {
-      verify(mMockFileSystem).createFile(eq(new AlluxioURI(TEST_DESTINATION)), Matchers
-          .eq(CreateFilePOptions.newBuilder().setWriteType(WritePType.CACHE_THROUGH).build()));
-    } else {
-      verify(mMockFileSystem).createFile(eq(new AlluxioURI(TEST_DESTINATION)), Matchers
-          .eq(CreateFilePOptions.newBuilder().setWriteType(WritePType.ASYNC_THROUGH).build()));
+  @Test
+  public void overwriteTest() throws Exception {
+    final AtomicBoolean deleteCalled = new AtomicBoolean(false);
+
+    when(mMockFileSystem.createFile(eq(new AlluxioURI(TEST_DESTINATION)), any()))
+        .thenAnswer((invocation) -> {
+          if (deleteCalled.get()) {
+            return mMockOutStream;
+          }
+          throw new FileAlreadyExistsException("already exists");
+        });
+
+    doAnswer((invocation) -> {
+      if (deleteCalled.get()) {
+        throw new FileDoesNotExistException("doesn't exist");
+      }
+      deleteCalled.set(true);
+      return null;
+    }).when(mMockFileSystem).delete(eq(new AlluxioURI(TEST_DESTINATION)));
+
+    try {
+      runTask(TEST_SOURCE, TEST_SOURCE, TEST_DESTINATION, WriteType.THROUGH, false);
+      fail();
+    } catch (FileAlreadyExistsException e) {
+      // expected
     }
+
+    runTask(TEST_SOURCE, TEST_SOURCE, TEST_DESTINATION, WriteType.THROUGH, true);
   }
 
   /**
@@ -212,9 +206,23 @@ public final class MigrateDefinitionRunTaskTest {
    */
   private void runTask(String configSource, String commandSource, String commandDestination,
       WriteType writeType) throws Exception {
+    runTask(configSource, commandSource, commandDestination, writeType, false);
+  }
+
+  /**
+   * Runs the task.
+   *
+   * @param configSource {@link MigrateConfig} source
+   * @param commandSource {@link MigrateCommand} source
+   * @param commandDestination {@link MigrateCommand} destination
+   * @param writeType {@link MigrateConfig} writeType
+   * @param overwrite (@link MigrateConfig} overwrite
+   */
+  private void runTask(String configSource, String commandSource, String commandDestination,
+                       WriteType writeType, boolean overwrite) throws Exception {
     new MigrateDefinition().runTask(
-        new MigrateConfig(configSource, "", writeType.toString(), false, mDeleteSource),
-        Lists.newArrayList(new MigrateCommand(commandSource, commandDestination)),
+        new MigrateConfig(configSource, "", writeType.toString(), overwrite),
+        new MigrateCommand(commandSource, commandDestination),
         new RunTaskContext(1, 1,
             new JobServerContext(mMockFileSystem, mMockFileSystemContext, mMockUfsManager)));
   }

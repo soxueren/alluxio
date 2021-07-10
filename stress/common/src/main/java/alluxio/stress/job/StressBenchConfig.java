@@ -18,6 +18,8 @@ import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
 import com.google.common.base.Preconditions;
 
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 
 import javax.annotation.concurrent.ThreadSafe;
@@ -33,23 +35,33 @@ public final class StressBenchConfig implements PlanConfig {
   private final String mClassName;
   private final List<String> mArgs;
   private final long mStartDelayMs;
+  private final int mClusterLimit;
 
   /**
    * @param className the class name of the benchmark to run
    * @param args the args for the benchmark
    * @param startDelayMs the start delay for the distributed tasks, in ms
+   * @param clusterLimit the max number of workers to run on. If 0, run on entire cluster,
+   *                     If < 0, starts scheduling from the end of the worker list
    */
   public StressBenchConfig(@JsonProperty("className") String className,
       @JsonProperty("args") List<String> args,
-      @JsonProperty("startDelayMs") long startDelayMs) {
+      @JsonProperty("startDelayMs") long startDelayMs,
+      @JsonProperty("clusterLimit") int clusterLimit) {
     mClassName = Preconditions.checkNotNull(className, "className");
     mArgs = Preconditions.checkNotNull(args, "args");
     mStartDelayMs = startDelayMs;
+    mClusterLimit = clusterLimit;
   }
 
   @Override
   public String getName() {
     return NAME;
+  }
+
+  @Override
+  public Collection<String> affectedPaths() {
+    return Collections.EMPTY_LIST;
   }
 
   /**
@@ -73,6 +85,14 @@ public final class StressBenchConfig implements PlanConfig {
     return mStartDelayMs;
   }
 
+  /**
+   * @return the number of workers to run on. If < 0, starts from the end of the worker list
+   *         If == 0, run on entire cluster
+   */
+  public int getClusterLimit() {
+    return mClusterLimit;
+  }
+
   @Override
   public boolean equals(Object obj) {
     if (obj == null) {
@@ -87,12 +107,13 @@ public final class StressBenchConfig implements PlanConfig {
     StressBenchConfig that = (StressBenchConfig) obj;
     return Objects.equal(mClassName, that.mClassName)
         && Objects.equal(mArgs, that.mArgs)
-        && Objects.equal(mStartDelayMs, that.mStartDelayMs);
+        && Objects.equal(mStartDelayMs, that.mStartDelayMs)
+        && Objects.equal(mClusterLimit, that.mClusterLimit);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hashCode(mClassName, mArgs, mStartDelayMs);
+    return Objects.hashCode(mClassName, mArgs, mStartDelayMs, mClusterLimit);
   }
 
   @Override
@@ -101,6 +122,7 @@ public final class StressBenchConfig implements PlanConfig {
         .add("className", mClassName)
         .add("args", mArgs)
         .add("startDelayMs", mStartDelayMs)
+        .add("clusterLimit", mClusterLimit)
         .toString();
   }
 }

@@ -20,6 +20,7 @@ import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import alluxio.Constants;
 import alluxio.conf.PropertyKey;
 import alluxio.conf.ServerConfiguration;
 import alluxio.exception.BlockAlreadyExistsException;
@@ -35,7 +36,8 @@ import alluxio.util.io.FileUtils;
 import alluxio.worker.block.evictor.EvictionPlan;
 import alluxio.worker.block.evictor.Evictor;
 import alluxio.worker.block.evictor.Evictor.Mode;
-import alluxio.worker.block.meta.BlockMeta;
+import alluxio.worker.block.meta.DefaultBlockMeta;
+import alluxio.worker.block.meta.DefaultTempBlockMeta;
 import alluxio.worker.block.meta.StorageDir;
 import alluxio.worker.block.meta.TempBlockMeta;
 import alluxio.worker.block.annotator.BlockIterator;
@@ -49,7 +51,6 @@ import org.junit.rules.TemporaryFolder;
 import org.mockito.invocation.InvocationOnMock;
 
 import java.io.File;
-import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -93,20 +94,16 @@ public final class TieredBlockStoreTest {
   }
 
   private void init(long reservedBytes) throws Exception {
+    ServerConfiguration.set(PropertyKey.WORKER_REVIEWER_CLASS,
+            "alluxio.worker.block.reviewer.AcceptingReviewer");
     // No reserved space for tests that are not swap related.
     ServerConfiguration.set(PropertyKey.WORKER_MANAGEMENT_TIER_ALIGN_RESERVED_BYTES, reservedBytes);
 
     File tempFolder = mTestFolder.newFolder();
     TieredBlockStoreTestUtils.setupDefaultConf(tempFolder.getAbsolutePath());
-    mBlockStore = new TieredBlockStore();
-
-    // TODO(bin): Avoid using reflection to get private members.
-    Field field = mBlockStore.getClass().getDeclaredField("mMetaManager");
-    field.setAccessible(true);
-    mMetaManager = (BlockMetadataManager) field.get(mBlockStore);
-    field = mBlockStore.getClass().getDeclaredField("mLockManager");
-    field.setAccessible(true);
-    mLockManager = (BlockLockManager) field.get(mBlockStore);
+    mMetaManager = BlockMetadataManager.createBlockMetadataManager();
+    mLockManager = new BlockLockManager();
+    mBlockStore = new TieredBlockStore(mMetaManager, mLockManager);
     mBlockIterator = mMetaManager.getBlockIterator();
 
     mTestDir1 = mMetaManager.getTier(FIRST_TIER_ALIAS).getDir(0);
@@ -194,8 +191,8 @@ public final class TieredBlockStoreTest {
     mBlockStore.commitBlock(SESSION_ID1, TEMP_BLOCK_ID, false);
     assertTrue(mBlockStore.hasBlockMeta(TEMP_BLOCK_ID));
     assertFalse(
-        FileUtils.exists(TempBlockMeta.tempPath(mTestDir1, SESSION_ID1, TEMP_BLOCK_ID)));
-    assertTrue(FileUtils.exists(TempBlockMeta.commitPath(mTestDir1, TEMP_BLOCK_ID)));
+        FileUtils.exists(DefaultTempBlockMeta.tempPath(mTestDir1, SESSION_ID1, TEMP_BLOCK_ID)));
+    assertTrue(FileUtils.exists(DefaultBlockMeta.commitPath(mTestDir1, TEMP_BLOCK_ID)));
   }
 
   /**
@@ -208,8 +205,8 @@ public final class TieredBlockStoreTest {
     assertFalse(mTestDir1.hasBlockMeta(BLOCK_ID1));
     assertFalse(mBlockStore.hasBlockMeta(TEMP_BLOCK_ID));
     assertFalse(
-        FileUtils.exists(TempBlockMeta.tempPath(mTestDir1, SESSION_ID1, TEMP_BLOCK_ID)));
-    assertFalse(FileUtils.exists(TempBlockMeta.commitPath(mTestDir1, TEMP_BLOCK_ID)));
+        FileUtils.exists(DefaultTempBlockMeta.tempPath(mTestDir1, SESSION_ID1, TEMP_BLOCK_ID)));
+    assertFalse(FileUtils.exists(DefaultBlockMeta.commitPath(mTestDir1, TEMP_BLOCK_ID)));
   }
 
   /**
@@ -224,8 +221,8 @@ public final class TieredBlockStoreTest {
     assertFalse(mTestDir1.hasBlockMeta(BLOCK_ID1));
     assertTrue(mTestDir2.hasBlockMeta(BLOCK_ID1));
     assertTrue(mBlockStore.hasBlockMeta(BLOCK_ID1));
-    assertFalse(FileUtils.exists(BlockMeta.commitPath(mTestDir1, BLOCK_ID1)));
-    assertTrue(FileUtils.exists(BlockMeta.commitPath(mTestDir2, BLOCK_ID1)));
+    assertFalse(FileUtils.exists(DefaultBlockMeta.commitPath(mTestDir1, BLOCK_ID1)));
+    assertTrue(FileUtils.exists(DefaultBlockMeta.commitPath(mTestDir2, BLOCK_ID1)));
 
     // Move block from the specific Dir
     TieredBlockStoreTestUtils.cache2(SESSION_ID2, BLOCK_ID2, BLOCK_SIZE, mTestDir1, mMetaManager,
@@ -242,8 +239,8 @@ public final class TieredBlockStoreTest {
     assertFalse(mTestDir1.hasBlockMeta(BLOCK_ID2));
     assertTrue(mTestDir3.hasBlockMeta(BLOCK_ID2));
     assertTrue(mBlockStore.hasBlockMeta(BLOCK_ID2));
-    assertFalse(FileUtils.exists(BlockMeta.commitPath(mTestDir1, BLOCK_ID2)));
-    assertTrue(FileUtils.exists(BlockMeta.commitPath(mTestDir3, BLOCK_ID2)));
+    assertFalse(FileUtils.exists(DefaultBlockMeta.commitPath(mTestDir1, BLOCK_ID2)));
+    assertTrue(FileUtils.exists(DefaultBlockMeta.commitPath(mTestDir3, BLOCK_ID2)));
 
     // Move block from the specific tier
     mBlockStore.moveBlock(SESSION_ID2, BLOCK_ID2,
@@ -252,8 +249,28 @@ public final class TieredBlockStoreTest {
     assertFalse(mTestDir1.hasBlockMeta(BLOCK_ID2));
     assertTrue(mTestDir3.hasBlockMeta(BLOCK_ID2));
     assertTrue(mBlockStore.hasBlockMeta(BLOCK_ID2));
-    assertFalse(FileUtils.exists(BlockMeta.commitPath(mTestDir1, BLOCK_ID2)));
-    assertTrue(FileUtils.exists(BlockMeta.commitPath(mTestDir3, BLOCK_ID2)));
+    assertFalse(FileUtils.exists(DefaultBlockMeta.commitPath(mTestDir1, BLOCK_ID2)));
+    assertTrue(FileUtils.exists(DefaultBlockMeta.commitPath(mTestDir3, BLOCK_ID2)));
+  }
+
+  @Test
+  public void tierMoveTargetIsFull() throws Exception {
+    TieredBlockStoreTestUtils.cache2(SESSION_ID1, BLOCK_ID1, BLOCK_SIZE, mTestDir1, mMetaManager,
+            mBlockIterator);
+    // Fill up the target dir
+    TieredBlockStoreTestUtils.cache2(SESSION_ID2, BLOCK_ID2, mTestDir2.getCapacityBytes(),
+            mTestDir2, mMetaManager, mBlockIterator);
+    mThrown.expect(WorkerOutOfSpaceException.class);
+    mThrown.expectMessage(ExceptionMessage.NO_SPACE_FOR_BLOCK_MOVE.getMessage(
+            mTestDir2.toBlockStoreLocation(), BLOCK_ID1));
+    mBlockStore.moveBlock(SESSION_ID1, BLOCK_ID1,
+            AllocateOptions.forTierMove(mTestDir2.toBlockStoreLocation()));
+    // Consistency check: the block is still in its original location
+    assertTrue(mTestDir1.hasBlockMeta(BLOCK_ID1));
+    assertFalse(mTestDir2.hasBlockMeta(BLOCK_ID1));
+    assertTrue(mBlockStore.hasBlockMeta(BLOCK_ID1));
+    assertTrue(FileUtils.exists(DefaultBlockMeta.commitPath(mTestDir1, BLOCK_ID1)));
+    assertFalse(FileUtils.exists(DefaultBlockMeta.commitPath(mTestDir2, BLOCK_ID1)));
   }
 
   /**
@@ -274,7 +291,7 @@ public final class TieredBlockStoreTest {
     assertTrue(mTestDir1.hasBlockMeta(BLOCK_ID1));
     assertFalse(mMetaManager.hasTempBlockMeta(BLOCK_ID1));
     assertTrue(mBlockStore.hasBlockMeta(BLOCK_ID1));
-    assertTrue(FileUtils.exists(BlockMeta.commitPath(mTestDir1, BLOCK_ID1)));
+    assertTrue(FileUtils.exists(DefaultBlockMeta.commitPath(mTestDir1, BLOCK_ID1)));
   }
 
   /**
@@ -287,7 +304,7 @@ public final class TieredBlockStoreTest {
     mBlockStore.removeBlock(SESSION_ID1, BLOCK_ID1);
     assertFalse(mTestDir1.hasBlockMeta(BLOCK_ID1));
     assertFalse(mBlockStore.hasBlockMeta(BLOCK_ID1));
-    assertFalse(FileUtils.exists(BlockMeta.commitPath(mTestDir1, BLOCK_ID1)));
+    assertFalse(FileUtils.exists(DefaultBlockMeta.commitPath(mTestDir1, BLOCK_ID1)));
 
     // Remove block from specific Dir
     TieredBlockStoreTestUtils.cache2(SESSION_ID2, BLOCK_ID2, BLOCK_SIZE, mTestDir1, mMetaManager,
@@ -301,7 +318,7 @@ public final class TieredBlockStoreTest {
     mBlockStore.removeBlock(SESSION_ID2, BLOCK_ID2, mTestDir1.toBlockStoreLocation());
     assertFalse(mTestDir1.hasBlockMeta(BLOCK_ID2));
     assertFalse(mBlockStore.hasBlockMeta(BLOCK_ID2));
-    assertFalse(FileUtils.exists(BlockMeta.commitPath(mTestDir1, BLOCK_ID2)));
+    assertFalse(FileUtils.exists(DefaultBlockMeta.commitPath(mTestDir1, BLOCK_ID2)));
 
     // Remove block from the specific tier
     TieredBlockStoreTestUtils.cache2(SESSION_ID2, BLOCK_ID2, BLOCK_SIZE, mTestDir1, mMetaManager,
@@ -310,7 +327,7 @@ public final class TieredBlockStoreTest {
         BlockStoreLocation.anyDirInTier(mTestDir1.getParentTier().getTierAlias()));
     assertFalse(mTestDir1.hasBlockMeta(BLOCK_ID2));
     assertFalse(mBlockStore.hasBlockMeta(BLOCK_ID2));
-    assertFalse(FileUtils.exists(BlockMeta.commitPath(mTestDir1, BLOCK_ID2)));
+    assertFalse(FileUtils.exists(DefaultBlockMeta.commitPath(mTestDir1, BLOCK_ID2)));
   }
 
   /**
@@ -325,7 +342,7 @@ public final class TieredBlockStoreTest {
     // Expect BLOCK_ID1 to be moved out of mTestDir1
     assertEquals(mTestDir1.getCapacityBytes(), mTestDir1.getAvailableBytes());
     assertFalse(mTestDir1.hasBlockMeta(BLOCK_ID1));
-    assertFalse(FileUtils.exists(BlockMeta.commitPath(mTestDir1, BLOCK_ID1)));
+    assertFalse(FileUtils.exists(DefaultBlockMeta.commitPath(mTestDir1, BLOCK_ID1)));
   }
 
   @Test
@@ -341,8 +358,8 @@ public final class TieredBlockStoreTest {
     assertEquals(mTestDir1.getCapacityBytes(), mTestDir1.getAvailableBytes());
     assertFalse(mTestDir1.hasBlockMeta(BLOCK_ID1));
     assertFalse(mTestDir1.hasBlockMeta(BLOCK_ID2));
-    assertFalse(FileUtils.exists(BlockMeta.commitPath(mTestDir1, BLOCK_ID1)));
-    assertFalse(FileUtils.exists(BlockMeta.commitPath(mTestDir1, BLOCK_ID2)));
+    assertFalse(FileUtils.exists(DefaultBlockMeta.commitPath(mTestDir1, BLOCK_ID1)));
+    assertFalse(FileUtils.exists(DefaultBlockMeta.commitPath(mTestDir1, BLOCK_ID2)));
   }
 
   /**
@@ -365,7 +382,7 @@ public final class TieredBlockStoreTest {
       runnables.add(() -> {
         try {
           mBlockStore.freeSpace(SESSION_ID1, 0, 0,
-              new BlockStoreLocation("MEM", 0, BlockStoreLocation.ANY_MEDIUM));
+              new BlockStoreLocation(Constants.MEDIUM_MEM, 0, BlockStoreLocation.ANY_MEDIUM));
         } catch (Exception e) {
           fail();
         }
@@ -420,13 +437,13 @@ public final class TieredBlockStoreTest {
 
   @Test
   public void createBlockMetaWithMediumType() throws Exception {
-    BlockStoreLocation loc = BlockStoreLocation.anyDirInTierWithMedium("MEM");
+    BlockStoreLocation loc = BlockStoreLocation.anyDirInAnyTierWithMedium(Constants.MEDIUM_MEM);
     TempBlockMeta tempBlockMeta = mBlockStore.createBlock(SESSION_ID1, TEMP_BLOCK_ID,
         AllocateOptions.forCreate(1, loc));
     assertEquals(1, tempBlockMeta.getBlockSize());
     assertEquals(mTestDir2, tempBlockMeta.getParentDir());
 
-    BlockStoreLocation loc2 = BlockStoreLocation.anyDirInTierWithMedium("SSD");
+    BlockStoreLocation loc2 = BlockStoreLocation.anyDirInAnyTierWithMedium(Constants.MEDIUM_SSD);
     TempBlockMeta tempBlockMeta2 = mBlockStore.createBlock(SESSION_ID1, TEMP_BLOCK_ID2,
         AllocateOptions.forCreate(1, loc2));
     assertEquals(1, tempBlockMeta2.getBlockSize());

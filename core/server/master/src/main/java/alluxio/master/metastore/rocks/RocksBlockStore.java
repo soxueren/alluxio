@@ -30,6 +30,7 @@ import org.rocksdb.ReadOptions;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
+import org.rocksdb.Slice;
 import org.rocksdb.WriteOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -147,9 +148,14 @@ public class RocksBlockStore implements BlockStore {
 
   @Override
   public List<BlockLocation> getLocations(long id) {
-    try (RocksIterator iter = db().newIterator(mBlockLocationsColumn.get(),
-        new ReadOptions().setPrefixSameAsStart(true))) {
-      iter.seek(Longs.toByteArray(id));
+    byte[] startKey = RocksUtils.toByteArray(id, 0);
+    byte[] endKey = RocksUtils.toByteArray(id, Long.MAX_VALUE);
+
+    // Explicitly hold a reference to the ReadOptions object from the discussion in
+    // https://groups.google.com/g/rocksdb/c/PwapmWwyBbc/m/ecl7oW3AAgAJ
+    final ReadOptions readOptions = new ReadOptions().setIterateUpperBound(new Slice(endKey));
+    try (RocksIterator iter = db().newIterator(mBlockLocationsColumn.get(), readOptions)) {
+      iter.seek(startKey);
       List<BlockLocation> locations = new ArrayList<>();
       for (; iter.isValid(); iter.next()) {
         try {

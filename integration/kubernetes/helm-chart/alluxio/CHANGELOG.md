@@ -77,3 +77,111 @@
 - Refactored configmap to generate config properties in a list
 - Changed JVM options from one string to a list
 - Supported Helm version upgraded to 3.X
+
+0.6.0
+
+- Fix alluxio-fuse container fail to restart when it exited with error
+
+0.6.1
+
+- Infer hostNetwork, dnsPolicy and domain socket volume type based on the user
+
+0.6.2
+
+- Fix alluxio chart failed to deploy with helm when "fuse.enabled" is true in values.yaml(issue: #11542)
+
+0.6.3
+
+- Enabled worker domain socket to choose between hostPath and PVC
+- Refactored some worker domain socket PVC properties to be consistent with documentation
+- Enabled master metastore to choose between emptyDir and PVC
+- Enabled master journal to choose between emptyDir and PVC
+- Moved metastore configuration properties to the root level, to be the same as journal
+- Removed inferring hostNetwork, dnsPolicy and domain socket from whether user is root
+- Added inferring dnsPolicy from hostNetwork
+- Fixed one typo in ALLUXIO_CLIENT_JAVA_OPTS for FUSE
+
+0.6.4
+
+- Fixed Fuse crash issue
+- Changed master service to headless from NodePort
+- Made the single master access itself without service
+
+0.6.5
+
+- Removed alluxio.worker.hostname from ALLUXIO_JAVA_OPTS for Fuse
+- Increase the default memory limit to match the default xmx
+- Added hostPID for using Java profile
+
+0.6.6
+
+- Removed obsolete master journal formatting job configuration properties
+- Set hostPID default to false
+- Increase the default memory usage for Fuse
+
+0.6.7
+
+- Add environment variables to master, worker, fuse
+
+0.6.8
+
+- Fixed parsing issue with multiple medium types for tiered storage #11778
+
+0.6.9
+
+- Pass alluxio.user.hostname via ALLUXIO_USER_JAVA_OPTS for FUSE
+
+0.6.10
+
+- Change liveness and readiness probes to TCP probes
+
+0.6.11
+
+- Pass alluxio.user.hostname via ALLUXIO_FUSE_JAVA_OPTS for FUSE
+
+0.6.12
+
+- Add Metrics configurations including Prometheus
+- Add a table of keys and default values for the Helm templates in README
+
+0.6.13
+
+- Add remote logger for Alluxio services, putting the centralized logs in emptyDir/hostPath/PVC
+
+0.6.14
+
+- Migrate master StatefulSet and worker DaemonSet securityContext to Pod-level (see Issue [#13096](https://github.com/Alluxio/alluxio/issues/13096))
+
+0.6.15
+
+- Fix incorrect indentation in logserver secret volume mount
+
+0.6.16
+
+- Change helm-chart fuse hostPath type from File to CharDevice
+
+0.6.17
+
+- Add hostAliases in Master and Worker Pods
+
+0.6.18
+
+- Add support for Node tolerations
+
+0.6.19
+
+- Add serviceAccountName in Master, Worker, and FUSE Pods
+
+0.6.20
+
+- Add Master StatefulSet podManagementPolicy Parallel (see Issue [#13323](https://github.com/Alluxio/alluxio/issues/13323))
+
+0.6.21
+
+- Change logserver PVC default selectors to empty, so dynamic provisioning works by default configuration.
+
+0.6.22
+- Enable configuring logserver Deployment strategy to address [#13422](https://github.com/Alluxio/alluxio/issues/13422)
+
+0.6.23
+- Add Alluxio CSI support

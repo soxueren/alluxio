@@ -43,10 +43,15 @@ public abstract class PageStoreOptions {
             storeType.name()));
     }
     Path rootDir = PageStore.getStorePath(storeType, conf.get(PropertyKey.USER_CLIENT_CACHE_DIR));
-    options.setRootDir(rootDir.toString());
-    options.setPageSize(conf.getBytes(PropertyKey.USER_CLIENT_CACHE_PAGE_SIZE));
-    options.setCacheSize(conf.getBytes(PropertyKey.USER_CLIENT_CACHE_SIZE));
-    options.setAlluxioVersion(conf.get(PropertyKey.VERSION));
+    options.setRootDir(rootDir.toString())
+        .setPageSize(conf.getBytes(PropertyKey.USER_CLIENT_CACHE_PAGE_SIZE))
+        .setCacheSize(conf.getBytes(PropertyKey.USER_CLIENT_CACHE_SIZE))
+        .setAlluxioVersion(conf.get(PropertyKey.VERSION))
+        .setTimeoutDuration(conf.getMs(PropertyKey.USER_CLIENT_CACHE_TIMEOUT_DURATION))
+        .setTimeoutThreads(conf.getInt(PropertyKey.USER_CLIENT_CACHE_TIMEOUT_THREADS));
+    if (conf.isSet(PropertyKey.USER_CLIENT_CACHE_STORE_OVERHEAD)) {
+      options.setOverheadRatio(conf.getDouble(PropertyKey.USER_CLIENT_CACHE_STORE_OVERHEAD));
+    }
     return options;
   }
 
@@ -85,10 +90,29 @@ public abstract class PageStoreOptions {
   protected String mAlluxioVersion;
 
   /**
-   * @param rootDir the root directory where pages are stored
+   * Timeout duration for page store operations in ms.
    */
-  public void setRootDir(String rootDir) {
+  protected long mTimeoutDuration;
+
+  /**
+   * Number of threads for page store operations.
+   */
+  protected int mTimeoutThreads;
+
+  /**
+   * A fraction value representing the storage overhead.
+   * i.e., with 1GB allocated cache space, and 10% storage overhead we
+   * expect no more than 1024MB / (1 + 10%) user data to store
+   */
+  protected double mOverheadRatio;
+
+  /**
+   * @param rootDir the root directory where pages are stored
+   * @return the updated options
+   */
+  public PageStoreOptions setRootDir(String rootDir) {
     mRootDir = rootDir;
+    return this;
   }
 
   /**
@@ -107,9 +131,11 @@ public abstract class PageStoreOptions {
 
   /**
    * @param pageSize the size of the page in bytes
+   * @return the updated options
    */
-  public void setPageSize(long pageSize) {
+  public PageStoreOptions setPageSize(long pageSize) {
     mPageSize = pageSize;
+    return this;
   }
 
   /**
@@ -121,9 +147,11 @@ public abstract class PageStoreOptions {
 
   /**
    * @param cacheSize the size of the cache in bytes
+   * @return the updated options
    */
-  public void setCacheSize(long cacheSize) {
+  public PageStoreOptions setCacheSize(long cacheSize) {
     mCacheSize = cacheSize;
+    return this;
   }
 
   /**
@@ -135,8 +163,58 @@ public abstract class PageStoreOptions {
 
   /**
    * @param alluxioVersion Alluxio client version
+   * @return the updated options
    */
-  public void setAlluxioVersion(String alluxioVersion) {
+  public PageStoreOptions setAlluxioVersion(String alluxioVersion) {
     mAlluxioVersion = alluxioVersion;
+    return this;
+  }
+
+  /**
+   * @return timeout duration for page store operations in ms
+   */
+  public long getTimeoutDuration() {
+    return mTimeoutDuration;
+  }
+
+  /**
+   * @param timeout timeout duration for page store operations in ms
+   * @return the updated options
+   */
+  public PageStoreOptions setTimeoutDuration(long timeout) {
+    mTimeoutDuration = timeout;
+    return this;
+  }
+
+  /**
+   * @return number of threads for handling timeout
+   */
+  public int getTimeoutThreads() {
+    return mTimeoutThreads;
+  }
+
+  /**
+   * @param threads number of threads for handling timeout
+   * @return the updated options
+   */
+  public PageStoreOptions setTimeoutThreads(int threads) {
+    mTimeoutThreads = threads;
+    return this;
+  }
+
+  /**
+   * @return the fraction of space allocated for storage overhead
+   */
+  public double getOverheadRatio() {
+    return mOverheadRatio;
+  }
+
+  /**
+   * @param overheadRatio the fraction of space allocated for storage overhead
+   * @return the updated options
+   */
+  public PageStoreOptions setOverheadRatio(double overheadRatio) {
+    mOverheadRatio = overheadRatio;
+    return this;
   }
 }

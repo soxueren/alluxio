@@ -28,8 +28,7 @@ export const footerNavigationData: INavigationData[] = [
     url: routePaths.workers,
   },
   {
-    attributes: { target: '_blank' },
-    innerText: 'Slack Channel',
-    url: 'https://www.alluxio.io/slack',
+    innerText: 'MountTable',
+    url: routePaths.mounttable,
   },
 ];

@@ -27,6 +27,7 @@ import alluxio.exception.status.InvalidArgumentException;
 import alluxio.exception.status.UnavailableException;
 import alluxio.grpc.SetAclAction;
 import alluxio.master.Master;
+import alluxio.master.file.contexts.CheckAccessContext;
 import alluxio.master.file.contexts.CheckConsistencyContext;
 import alluxio.master.file.contexts.CompleteFileContext;
 import alluxio.master.file.contexts.CreateDirectoryContext;
@@ -166,6 +167,19 @@ public interface FileSystemMaster extends Master {
   FileSystemMasterView getFileSystemMasterView();
 
   /**
+   * Checks access to path.
+   *
+   * @param path the path to check access to
+   * @param context the method context
+   *
+   * @throws FileDoesNotExistException if the file does not exist
+   * @throws AccessControlException if permission checking fails
+   * @throws InvalidPathException if the given path is invalid
+   */
+  void checkAccess(AlluxioURI path, CheckAccessContext context)
+      throws FileDoesNotExistException, InvalidPathException, AccessControlException, IOException;
+
+  /**
    * Checks the consistency of the files and directories in the subtree under the path.
    *
    * @param path the root of the subtree to check
@@ -232,9 +246,9 @@ public interface FileSystemMaster extends Master {
       AccessControlException, UnavailableException;
 
   /**
-   * @return a copy of the current mount table
+   * @return a snapshot of the mount table as a mapping of Alluxio path to {@link MountPointInfo}
    */
-  Map<String, MountPointInfo>  getMountTable();
+  Map<String, MountPointInfo> getMountPointInfoSummary();
 
   /**
    * Gets the mount point information of an Alluxio path for display purpose.
@@ -243,16 +257,6 @@ public interface FileSystemMaster extends Master {
    * @return the mount point information
    */
   MountPointInfo getDisplayMountPointInfo(AlluxioURI path) throws InvalidPathException;
-
-  /**
-   * @return the number of files and directories
-   */
-  long getInodeCount();
-
-  /**
-   * @return the number of pinned files and directories
-   */
-  int getNumberOfPinnedFiles();
 
   /**
    * Deletes a given path.
@@ -568,6 +572,13 @@ public interface FileSystemMaster extends Master {
   boolean recordActiveSyncTxid(long txId, long mountId);
 
   /**
+   * Get the total inode count.
+   *
+   * @return inode count
+   */
+  long getInodeCount();
+
+  /**
    * @return the time series data stored by the master
    */
   List<TimeSeries> getTimeSeries();
@@ -584,4 +595,9 @@ public interface FileSystemMaster extends Master {
    * @return the owner of the root inode, null if the inode tree is not initialized
    */
   String getRootInodeOwner();
+
+  /**
+   * @return the list of thread identifiers that are waiting and holding the state lock
+   */
+  List<String> getStateLockSharedWaitersAndHolders();
 }

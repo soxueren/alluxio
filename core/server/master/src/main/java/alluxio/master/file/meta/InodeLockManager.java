@@ -15,7 +15,10 @@ import alluxio.collections.LockPool;
 import alluxio.concurrent.LockMode;
 import alluxio.conf.PropertyKey;
 import alluxio.conf.ServerConfiguration;
+import alluxio.metrics.MetricKey;
+import alluxio.metrics.MetricsSystem;
 import alluxio.resource.LockResource;
+import alluxio.resource.RWLockResource;
 import alluxio.util.interfaces.Scoped;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -96,6 +99,18 @@ public class InodeLockManager implements Closeable {
             }
           });
 
+  /**
+   * Creates a new instance of {@link InodeLockManager}.
+   */
+  public InodeLockManager() {
+    MetricsSystem.registerGaugeIfAbsent(
+        MetricKey.MASTER_INODE_LOCK_POOL_SIZE.getName(),
+        () -> mInodeLocks.size());
+    MetricsSystem.registerGaugeIfAbsent(
+        MetricKey.MASTER_EDGE_LOCK_POOL_SIZE.getName(),
+        () -> mEdgeLocks.size());
+  }
+
   @VisibleForTesting
   boolean inodeReadLockedByCurrentThread(long inodeId) {
     return mInodeLocks.getRawReadWriteLock(inodeId).getReadHoldCount() > 0;
@@ -150,7 +165,7 @@ public class InodeLockManager implements Closeable {
    * @return a lock resource which must be closed to release the lock
    * @see #tryLockInode(Long, LockMode)
    */
-  public LockResource lockInode(InodeView inode, LockMode mode, boolean useTryLock) {
+  public RWLockResource lockInode(InodeView inode, LockMode mode, boolean useTryLock) {
     return mInodeLocks.get(inode.getId(), mode, useTryLock);
   }
 
@@ -161,7 +176,7 @@ public class InodeLockManager implements Closeable {
    * @param mode the mode to lock in
    * @return either an empty optional, or a lock resource which must be closed to release the lock
    */
-  public Optional<LockResource> tryLockInode(Long inodeId, LockMode mode) {
+  public Optional<RWLockResource> tryLockInode(Long inodeId, LockMode mode) {
     return mInodeLocks.tryGet(inodeId, mode);
   }
 
@@ -176,7 +191,7 @@ public class InodeLockManager implements Closeable {
    * @return a lock resource which must be closed to release the lock
    * @see #tryLockEdge(Edge, LockMode)
    */
-  public LockResource lockEdge(Edge edge, LockMode mode, boolean useTryLock) {
+  public RWLockResource lockEdge(Edge edge, LockMode mode, boolean useTryLock) {
     return mEdgeLocks.get(edge, mode, useTryLock);
   }
 
@@ -187,7 +202,7 @@ public class InodeLockManager implements Closeable {
    * @param mode the mode to lock in
    * @return either an empty optional, or a lock resource which must be closed to release the lock
    */
-  public Optional<LockResource> tryLockEdge(Edge edge, LockMode mode) {
+  public Optional<RWLockResource> tryLockEdge(Edge edge, LockMode mode) {
     return mEdgeLocks.tryGet(edge, mode);
   }
 

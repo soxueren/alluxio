@@ -11,10 +11,13 @@
 
 package alluxio.master.table;
 
+import alluxio.conf.PropertyKey;
+import alluxio.conf.ServerConfiguration;
 import alluxio.grpc.table.ColumnStatisticsInfo;
 import alluxio.grpc.table.Schema;
 import alluxio.grpc.table.TableInfo;
 import alluxio.proto.journal.Table.AddTableEntry;
+import alluxio.proto.journal.Table.AddTablePartitionsEntry;
 import alluxio.table.common.UdbPartition;
 import alluxio.table.common.transform.TransformContext;
 import alluxio.table.common.transform.TransformDefinition;
@@ -22,6 +25,7 @@ import alluxio.table.common.transform.TransformPlan;
 import alluxio.table.common.udb.UdbTable;
 import alluxio.util.CommonUtils;
 
+import com.google.common.collect.Lists;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -44,6 +48,8 @@ import javax.annotation.concurrent.NotThreadSafe;
 public class Table {
   private static final Logger LOG = LoggerFactory.getLogger(Table.class);
   private static final long UNDEFINED_VERSION = -1;
+  private static final int PARTITIONS_CHUNK_SIZE = ServerConfiguration
+      .getInt(PropertyKey.TABLE_JOURNAL_PARTITIONS_CHUNK_SIZE);
 
   public static final long FIRST_VERSION = 1;
 
@@ -72,7 +78,7 @@ public class Table {
 
     mName = udbTable.getName();
     mSchema = udbTable.getSchema();
-    mOwner = udbTable.getOwner();
+    mOwner = udbTable.getOwner() == null ? "" : udbTable.getOwner();
     mStatistics = udbTable.getStatistics();
     mParameters = new HashMap<>(udbTable.getParameters());
 
@@ -90,16 +96,38 @@ public class Table {
         if (newPartition == null) {
           // partition does not exist yet
           newPartition = new Partition(udbPartition);
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("Existing table {}.{} adding UDB partition: {}",
+                database.getName(), mName, udbPartition.toString());
+          }
         } else if (!newPartition.getBaseLayout().equals(udbPartition.getLayout())) {
           // existing partition is updated
           newPartition = newPartition.createNext(udbPartition);
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("Existing table {}.{} updating UDB partition {}",
+                database.getName(), mName, udbPartition.toString());
+          }
+        } else {
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("Existing table {}.{} keeping partition spec: {}",
+                database.getName(), mName, udbPartition.toString());
+          }
         }
         partitions.add(newPartition);
       }
+      LOG.info("Updating existing table {}.{} with {} total partitions.",
+          database.getName(), mName, partitions.size());
     } else {
       // Use all the udb partitions
       partitions =
           udbTable.getPartitions().stream().map(Partition::new).collect(Collectors.toList());
+      LOG.info("Creating new table {}.{} with {} total partitions.",
+          database.getName(), mName, partitions.size());
+      if (LOG.isDebugEnabled()) {
+        udbTable.getPartitions().stream().forEach(udbPartition ->
+            LOG.debug("New table {}.{} adding UDB partition: {}.",
+                database.getName(), mName, udbPartition.toString()));
+      }
     }
     mPartitionScheme =
         PartitionScheme.create(partitions, udbTable.getLayout(), udbTable.getPartitionCols());
@@ -145,6 +173,17 @@ public class Table {
    */
   public static Table create(Database database, alluxio.proto.journal.Table.AddTableEntry entry) {
     return new Table(database, entry);
+  }
+
+  /**
+   * Add partitions to the current table.
+   *
+   * @param entry the add table partitions entry
+   */
+  public void addPartitions(alluxio.proto.journal.Table.AddTablePartitionsEntry entry) {
+    mPartitionScheme.addPartitions(entry.getPartitionsList().stream()
+        .map(p -> Partition.fromProto(mDatabase.getContext().getLayoutRegistry(), p))
+        .collect(Collectors.toList()));
   }
 
   /**
@@ -269,12 +308,10 @@ public class Table {
   /**
    * @return the journal proto representation
    */
-  public AddTableEntry toJournalProto() {
+  public AddTableEntry getTableJournalProto() {
     AddTableEntry.Builder builder = AddTableEntry.newBuilder()
         .setDbName(mDatabase.getName())
         .setTableName(mName)
-        .addAllPartitions(getPartitions().stream().map(Partition::toProto)
-            .collect(Collectors.toList()))
         .addAllTableStats(mStatistics)
         .setSchema(mSchema)
         .setOwner(mOwner)
@@ -285,6 +322,34 @@ public class Table {
         .setVersion(mVersion)
         .setVersionCreationTime(mVersionCreationTime);
 
+    List<Partition> partitions = getPartitions();
+    if (partitions.size() <= PARTITIONS_CHUNK_SIZE) {
+      builder.addAllPartitions(partitions.stream().map(Partition::toProto)
+          .collect(Collectors.toList()));
+    }
     return builder.build();
+  }
+
+  /**
+   * @return the journal proto representation
+   */
+  public List<AddTablePartitionsEntry> getTablePartitionsJournalProto() {
+    List<AddTablePartitionsEntry> partitionEntries = new ArrayList<>();
+    List<Partition> partitions = getPartitions();
+    if (partitions.size() <= PARTITIONS_CHUNK_SIZE) {
+      return partitionEntries;
+    }
+
+    for (List<Partition> partitionChunk : Lists.partition(partitions, PARTITIONS_CHUNK_SIZE)) {
+      partitionEntries.add(AddTablePartitionsEntry.newBuilder()
+          .setDbName(mDatabase.getName())
+          .setTableName(mName)
+          .setVersion(mVersion)
+          .addAllPartitions(partitionChunk.stream().map(Partition::toProto)
+              .collect(Collectors.toList()))
+          .build());
+    }
+
+    return partitionEntries;
   }
 }

@@ -11,6 +11,9 @@
 
 package alluxio.master.meta;
 
+import static alluxio.metrics.MetricInfo.UFS_OP_PREFIX;
+import static alluxio.metrics.MetricInfo.UFS_OP_SAVED_PREFIX;
+
 import alluxio.AlluxioURI;
 import alluxio.Constants;
 import alluxio.MasterStorageTierAssoc;
@@ -30,18 +33,16 @@ import alluxio.exception.InvalidPathException;
 import alluxio.exception.status.UnavailableException;
 import alluxio.grpc.ConfigProperty;
 import alluxio.grpc.GetConfigurationPOptions;
-import alluxio.grpc.ListStatusPOptions;
-import alluxio.grpc.LoadMetadataPType;
 import alluxio.grpc.OpenFilePOptions;
 import alluxio.grpc.ReadPType;
 import alluxio.master.AlluxioMasterProcess;
 import alluxio.master.block.BlockMaster;
+import alluxio.master.file.DefaultFileSystemMaster;
 import alluxio.master.file.FileSystemMaster;
 import alluxio.master.file.contexts.ListStatusContext;
 import alluxio.master.file.meta.MountTable;
 import alluxio.metrics.MetricKey;
 import alluxio.metrics.MetricsSystem;
-import alluxio.metrics.MetricInfo;
 import alluxio.security.authentication.AuthenticatedClientUser;
 import alluxio.security.user.ServerUserState;
 import alluxio.util.CommonUtils;
@@ -69,6 +70,7 @@ import alluxio.wire.MasterWebUIData;
 import alluxio.wire.MasterWebUIInit;
 import alluxio.wire.MasterWebUILogs;
 import alluxio.wire.MasterWebUIMetrics;
+import alluxio.wire.MasterWebUIMountTable;
 import alluxio.wire.MasterWebUIOverview;
 import alluxio.wire.MasterWebUIWorkers;
 import alluxio.wire.MountPointInfo;
@@ -94,6 +96,10 @@ import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URLDecoder;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -132,7 +138,7 @@ public final class AlluxioMasterRestServiceHandler {
   // endpoints
   public static final String GET_INFO = "info";
 
-  // webui endpoints // TODO(william): DRY up these enpoints
+  // webui endpoints // TODO(william): DRY up these endpoints
   public static final String WEBUI_INIT = "webui_init";
   public static final String WEBUI_OVERVIEW = "webui_overview";
   public static final String WEBUI_BROWSE = "webui_browse";
@@ -141,6 +147,7 @@ public final class AlluxioMasterRestServiceHandler {
   public static final String WEBUI_CONFIG = "webui_config";
   public static final String WEBUI_WORKERS = "webui_workers";
   public static final String WEBUI_METRICS = "webui_metrics";
+  public static final String WEBUI_MOUNTTABLE = "webui_mounttable";
 
   // queries
   public static final String QUERY_RAW_CONFIGURATION = "raw_configuration";
@@ -288,7 +295,7 @@ public final class AlluxioMasterRestServiceHandler {
         long capacityBytes = mountInfo.getUfsCapacityBytes();
         long usedBytes = mountInfo.getUfsUsedBytes();
         long freeBytes = -1;
-        if (capacityBytes >= 0 && usedBytes >= 0 && capacityBytes >= usedBytes) {
+        if (usedBytes >= 0 && capacityBytes >= usedBytes) {
           freeBytes = capacityBytes - usedBytes;
         }
 
@@ -312,6 +319,37 @@ public final class AlluxioMasterRestServiceHandler {
       } catch (Throwable e) {
         response.setDiskCapacity("UNKNOWN").setDiskUsedCapacity("UNKNOWN")
             .setDiskFreeCapacity("UNKNOWN");
+      }
+      mMetaMaster.getJournalSpaceMonitor().map(monitor ->
+          response.setJournalDiskWarnings(monitor.getJournalDiskWarnings()));
+
+      Gauge entriesSinceGauge = MetricsSystem.METRIC_REGISTRY.getGauges()
+              .get(MetricKey.MASTER_JOURNAL_ENTRIES_SINCE_CHECKPOINT.getName());
+      Gauge lastCkPtGauge = MetricsSystem.METRIC_REGISTRY.getGauges()
+          .get(MetricKey.MASTER_JOURNAL_LAST_CHECKPOINT_TIME.getName());
+
+      if (entriesSinceGauge != null && lastCkPtGauge != null) {
+        long entriesSinceCkpt = (Long) entriesSinceGauge.getValue();
+        long lastCkptTime = (Long) lastCkPtGauge.getValue();
+        long timeSinceCkpt = System.currentTimeMillis() - lastCkptTime;
+        boolean overThreshold = timeSinceCkpt > ServerConfiguration.getMs(
+            PropertyKey.MASTER_WEB_JOURNAL_CHECKPOINT_WARNING_THRESHOLD_TIME);
+        boolean passedThreshold = entriesSinceCkpt > ServerConfiguration
+            .getLong(PropertyKey.MASTER_JOURNAL_CHECKPOINT_PERIOD_ENTRIES);
+        if (passedThreshold && overThreshold) {
+          String time = lastCkptTime > 0 ? ZonedDateTime
+              .ofInstant(Instant.ofEpochMilli(lastCkptTime), ZoneOffset.UTC)
+              .format(DateTimeFormatter.ISO_INSTANT) : "N/A";
+          String advice = ConfigurationUtils.isHaMode(ServerConfiguration.global()) ? ""
+              : "It is recommended to use the fsadmin tool to checkpoint the journal. This will "
+              + "prevent the master from serving requests while checkpointing.";
+          response.setJournalCheckpointTimeWarning(String.format("Journal has not checkpointed in "
+              + "a timely manner since passing the checkpoint threshold (%d/%d). Last checkpoint:"
+              + " %s. %s",
+              entriesSinceCkpt,
+              ServerConfiguration.getLong(PropertyKey.MASTER_JOURNAL_CHECKPOINT_PERIOD_ENTRIES),
+              time, advice));
+        }
       }
 
       return response;
@@ -373,7 +411,7 @@ public final class AlluxioMasterRestServiceHandler {
               relativeOffset = Long.parseLong(requestOffset);
             }
           } catch (NumberFormatException e) {
-            relativeOffset = 0;
+            // ignore the exception
           }
           // If no param "end" presents, the offset is relative to the beginning; otherwise, it is
           // relative to the end of the file.
@@ -453,8 +491,7 @@ public final class AlluxioMasterRestServiceHandler {
           response.setPathInfos(pathInfos);
         }
 
-        filesInfo = mFileSystemMaster.listStatus(currentPath, ListStatusContext.mergeFrom(
-            ListStatusPOptions.newBuilder().setLoadMetadataType(LoadMetadataPType.ALWAYS)));
+        filesInfo = mFileSystemMaster.listStatus(currentPath, ListStatusContext.defaults());
       } catch (FileDoesNotExistException e) {
         response.setInvalidPathError("Error: Invalid Path " + e.getMessage());
         return response;
@@ -506,7 +543,7 @@ public final class AlluxioMasterRestServiceHandler {
         }
         fileInfos.add(toAdd);
       }
-      Collections.sort(fileInfos, UIFileInfo.PATH_STRING_COMPARE);
+      fileInfos.sort(UIFileInfo.PATH_STRING_COMPARE);
 
       response.setNTotalFile(fileInfos.size());
 
@@ -654,7 +691,7 @@ public final class AlluxioMasterRestServiceHandler {
                 new MasterStorageTierAssoc().getOrderedStorageAliases()));
           }
         }
-        Collections.sort(fileInfos, UIFileInfo.PATH_STRING_COMPARE);
+        fileInfos.sort(UIFileInfo.PATH_STRING_COMPARE);
         response.setNTotalFile(fileInfos.size());
 
         try {
@@ -687,20 +724,18 @@ public final class AlluxioMasterRestServiceHandler {
 
         try {
           long fileSize = logFile.length();
-          String offsetParam = requestOffset;
           long relativeOffset = 0;
           long offset;
           try {
-            if (offsetParam != null) {
-              relativeOffset = Long.parseLong(offsetParam);
+            if (requestOffset != null) {
+              relativeOffset = Long.parseLong(requestOffset);
             }
           } catch (NumberFormatException e) {
-            relativeOffset = 0;
+            // ignore the exception
           }
-          String endParam = requestEnd;
           // If no param "end" presents, the offset is relative to the beginning; otherwise, it is
           // relative to the end of the file.
-          if (endParam.equals("")) {
+          if (requestEnd.equals("")) {
             offset = relativeOffset;
           } else {
             offset = fileSize - relativeOffset;
@@ -803,13 +838,34 @@ public final class AlluxioMasterRestServiceHandler {
   }
 
   /**
+   * Gets Web UI mount table page data.
+   *
+   * @return the response object
+   */
+  @GET
+  @Path(WEBUI_MOUNTTABLE)
+  public Response getWebUIMountTable() {
+    return RestUtils.call(() -> {
+      MasterWebUIMountTable response = new MasterWebUIMountTable();
+
+      response.setDebug(ServerConfiguration.getBoolean(PropertyKey.DEBUG));
+      Map<String, MountPointInfo> mountPointInfo = getMountPointsInternal();
+
+      response.setMountPointInfos(mountPointInfo);
+
+      return response;
+    }, ServerConfiguration.global());
+  }
+
+  /**
    * @param ufs the ufs uri encoded by {@link MetricsSystem#escape(AlluxioURI)}
    * @return whether the ufs uri is a mount point
    */
   @VisibleForTesting
   boolean isMounted(String ufs) {
     ufs = PathUtils.normalizePath(ufs, AlluxioURI.SEPARATOR);
-    for (Map.Entry<String, MountPointInfo> entry : mFileSystemMaster.getMountTable().entrySet()) {
+    for (Map.Entry<String, MountPointInfo> entry :
+        mFileSystemMaster.getMountPointInfoSummary().entrySet()) {
       String escaped = MetricsSystem.escape(new AlluxioURI(entry.getValue().getUfsUri()));
       escaped = PathUtils.normalizePath(escaped, AlluxioURI.SEPARATOR);
       if (escaped.equals(ufs)) {
@@ -859,7 +915,7 @@ public final class AlluxioMasterRestServiceHandler {
       Long bytesReadLocal = counters.get(
           MetricKey.CLUSTER_BYTES_READ_LOCAL.getName()).getCount();
       Long bytesReadRemote = counters.get(
-          MetricKey.CLUSTER_BYTES_READ_ALLUXIO.getName()).getCount();
+          MetricKey.CLUSTER_BYTES_READ_REMOTE.getName()).getCount();
       Long bytesReadDomainSocket = counters.get(
           MetricKey.CLUSTER_BYTES_READ_DOMAIN.getName()).getCount();
       Long bytesReadUfs = counters.get(
@@ -870,15 +926,14 @@ public final class AlluxioMasterRestServiceHandler {
           .setTotalBytesReadUfs(FormatUtils.getSizeFromBytes(bytesReadUfs));
 
       // cluster cache hit and miss
-      long bytesReadTotal = bytesReadLocal + bytesReadRemote + bytesReadUfs + bytesReadDomainSocket;
+      long bytesReadTotal = bytesReadLocal + bytesReadRemote + bytesReadDomainSocket;
       double cacheHitLocalPercentage =
           (bytesReadTotal > 0)
               ? (100D * (bytesReadLocal + bytesReadDomainSocket) / bytesReadTotal) : 0;
       double cacheHitRemotePercentage =
-          (bytesReadTotal > 0) ? (100D * bytesReadRemote / bytesReadTotal) : 0;
+          (bytesReadTotal > 0) ? (100D * (bytesReadRemote - bytesReadUfs) / bytesReadTotal) : 0;
       double cacheMissPercentage =
           (bytesReadTotal > 0) ? (100D * bytesReadUfs / bytesReadTotal) : 0;
-
       response.setCacheHitLocal(String.format("%.2f", cacheHitLocalPercentage))
           .setCacheHitRemote(String.format("%.2f", cacheHitRemotePercentage))
           .setCacheMiss(String.format("%.2f", cacheMissPercentage));
@@ -887,13 +942,13 @@ public final class AlluxioMasterRestServiceHandler {
       Long bytesWrittenLocal = counters
           .get(MetricKey.CLUSTER_BYTES_WRITTEN_LOCAL.getName()).getCount();
       Long bytesWrittenAlluxio = counters
-          .get(MetricKey.CLUSTER_BYTES_WRITTEN_ALLUXIO.getName()).getCount();
+          .get(MetricKey.CLUSTER_BYTES_WRITTEN_REMOTE.getName()).getCount();
       Long bytesWrittenDomainSocket = counters.get(
           MetricKey.CLUSTER_BYTES_WRITTEN_DOMAIN.getName()).getCount();
       Long bytesWrittenUfs = counters
           .get(MetricKey.CLUSTER_BYTES_WRITTEN_UFS_ALL.getName()).getCount();
       response.setTotalBytesWrittenLocal(FormatUtils.getSizeFromBytes(bytesWrittenLocal))
-          .setTotalBytesWrittenAlluxio(FormatUtils.getSizeFromBytes(bytesWrittenAlluxio))
+          .setTotalBytesWrittenRemote(FormatUtils.getSizeFromBytes(bytesWrittenAlluxio))
           .setTotalBytesWrittenDomainSocket(FormatUtils.getSizeFromBytes(bytesWrittenDomainSocket))
           .setTotalBytesWrittenUfs(FormatUtils.getSizeFromBytes(bytesWrittenUfs));
 
@@ -903,7 +958,7 @@ public final class AlluxioMasterRestServiceHandler {
       Long bytesReadDomainSocketThroughput = (Long) gauges
           .get(MetricKey.CLUSTER_BYTES_READ_DOMAIN_THROUGHPUT.getName()).getValue();
       Long bytesReadRemoteThroughput = (Long) gauges
-          .get(MetricKey.CLUSTER_BYTES_READ_ALLUXIO_THROUGHPUT.getName()).getValue();
+          .get(MetricKey.CLUSTER_BYTES_READ_REMOTE_THROUGHPUT.getName()).getValue();
       Long bytesReadUfsThroughput = (Long) gauges
           .get(MetricKey.CLUSTER_BYTES_READ_UFS_THROUGHPUT.getName()).getValue();
       response
@@ -919,14 +974,14 @@ public final class AlluxioMasterRestServiceHandler {
           .get(MetricKey.CLUSTER_BYTES_WRITTEN_LOCAL_THROUGHPUT.getName())
           .getValue();
       Long bytesWrittenAlluxioThroughput = (Long) gauges
-          .get(MetricKey.CLUSTER_BYTES_WRITTEN_ALLUXIO_THROUGHPUT.getName()).getValue();
+          .get(MetricKey.CLUSTER_BYTES_WRITTEN_REMOTE_THROUGHPUT.getName()).getValue();
       Long bytesWrittenDomainSocketThroughput = (Long) gauges.get(
           MetricKey.CLUSTER_BYTES_WRITTEN_DOMAIN_THROUGHPUT.getName()).getValue();
       Long bytesWrittenUfsThroughput = (Long) gauges
           .get(MetricKey.CLUSTER_BYTES_WRITTEN_UFS_THROUGHPUT.getName()).getValue();
       response.setTotalBytesWrittenLocalThroughput(
               FormatUtils.getSizeFromBytes(bytesWrittenLocalThroughput))
-          .setTotalBytesWrittenAlluxioThroughput(
+          .setTotalBytesWrittenRemoteThroughput(
               FormatUtils.getSizeFromBytes(bytesWrittenAlluxioThroughput))
           .setTotalBytesWrittenDomainSocketThroughput(
               FormatUtils.getSizeFromBytes(bytesWrittenDomainSocketThroughput))
@@ -944,6 +999,9 @@ public final class AlluxioMasterRestServiceHandler {
       Map<String, String> ufsWriteSizeMap = new TreeMap<>();
       Map<String, Counter> rpcInvocations = new TreeMap<>();
       Map<String, Metric> operations = new TreeMap<>();
+      // UFS : (OPS : Count)
+      Map<String, Map<String, Long>> ufsOpsSavedMap = new TreeMap<>();
+
       for (Map.Entry<String, Counter> entry : counters.entrySet()) {
         String metricName = entry.getKey();
         long value = entry.getValue().getCount();
@@ -960,6 +1018,24 @@ public final class AlluxioMasterRestServiceHandler {
         } else if (metricName.endsWith("Ops")) {
           rpcInvocations
               .put(MetricsSystem.stripInstanceAndHost(metricName), entry.getValue());
+        } else if (metricName.contains(UFS_OP_SAVED_PREFIX)) {
+          String ufs = alluxio.metrics.Metric.getTagUfsValueFromFullName(metricName);
+          if (ufs != null && isMounted(ufs)) {
+            // Unescape the URI for display
+            String ufsUnescaped = MetricsSystem.unescape(ufs);
+            Map<String, Long> perUfsMap = ufsOpsSavedMap.getOrDefault(
+                ufsUnescaped, new TreeMap<>());
+            String alluxioOperation = alluxio.metrics.Metric.getBaseName(metricName)
+                .substring(UFS_OP_SAVED_PREFIX.length());
+            String equivalentOp = DefaultFileSystemMaster.Metrics.UFS_OPS_DESC.get(
+                DefaultFileSystemMaster.Metrics.UFSOps.valueOf(alluxioOperation));
+            if (equivalentOp != null) {
+              alluxioOperation = String.format("%s (Roughly equivalent to %s operation)",
+                  alluxioOperation, equivalentOp);
+            }
+            perUfsMap.put(alluxioOperation, entry.getValue().getCount());
+            ufsOpsSavedMap.put(ufsUnescaped, perUfsMap);
+          }
         } else {
           operations
               .put(MetricsSystem.stripInstanceAndHost(metricName), entry.getValue());
@@ -974,18 +1050,20 @@ public final class AlluxioMasterRestServiceHandler {
 
       response.setUfsReadSize(ufsReadSizeMap);
       response.setUfsWriteSize(ufsWriteSizeMap);
+      response.setUfsOpsSaved(ufsOpsSavedMap);
 
       // per UFS ops
       Map<String, Map<String, Long>> ufsOpsMap = new TreeMap<>();
       for (Map.Entry<String, Gauge> entry : gauges.entrySet()) {
         String metricName = entry.getKey();
-        if (metricName.contains(MetricInfo.UFS_OP_PREFIX)) {
+        if (metricName.contains(UFS_OP_PREFIX)) {
           String ufs = alluxio.metrics.Metric.getTagUfsValueFromFullName(metricName);
           if (ufs != null && isMounted(ufs)) {
             // Unescape the URI for display
             String ufsUnescaped = MetricsSystem.unescape(ufs);
-            Map<String, Long> perUfsMap = ufsOpsMap.getOrDefault(ufs, new TreeMap<>());
-            perUfsMap.put(ufsUnescaped, (Long) entry.getValue().getValue());
+            Map<String, Long> perUfsMap = ufsOpsMap.getOrDefault(ufsUnescaped, new TreeMap<>());
+            perUfsMap.put(alluxio.metrics.Metric.getBaseName(metricName)
+                .substring(UFS_OP_PREFIX.length()), (Long) entry.getValue().getValue());
             ufsOpsMap.put(ufsUnescaped, perUfsMap);
           }
         }
@@ -993,6 +1071,38 @@ public final class AlluxioMasterRestServiceHandler {
       response.setUfsOps(ufsOpsMap);
 
       response.setTimeSeriesMetrics(mFileSystemMaster.getTimeSeries());
+      mMetaMaster.getJournalSpaceMonitor().ifPresent(monitor -> {
+        try {
+          response.setJournalDiskMetrics(monitor.getDiskInfo());
+        } catch (IOException e) {
+          LogUtils.warnWithException(LOG,
+              "Failed to populate journal disk information for WebUI metrics.", e);
+        }
+      });
+      if (response.getJournalDiskMetrics() == null) {
+        response.setJournalDiskMetrics(Collections.emptyList());
+      }
+
+      Gauge lastCheckpointTimeGauge =
+          gauges.get(MetricKey.MASTER_JOURNAL_LAST_CHECKPOINT_TIME.getName());
+      Gauge entriesSinceCheckpointGauge =
+          gauges.get(MetricKey.MASTER_JOURNAL_ENTRIES_SINCE_CHECKPOINT.getName());
+
+      if (entriesSinceCheckpointGauge != null) {
+        response.setJournalEntriesSinceCheckpoint((long) entriesSinceCheckpointGauge.getValue());
+      }
+      if (lastCheckpointTimeGauge != null) {
+        long lastCheckpointTime = (long) lastCheckpointTimeGauge.getValue();
+        String time;
+        if (lastCheckpointTime > 0) {
+          time = ZonedDateTime
+              .ofInstant(Instant.ofEpochMilli(lastCheckpointTime), ZoneOffset.UTC)
+              .format(DateTimeFormatter.ISO_INSTANT);
+        } else {
+          time = "N/A";
+        }
+        response.setJournalLastCheckpointTime(time);
+      }
 
       return response;
     }, ServerConfiguration.global());
@@ -1043,7 +1153,7 @@ public final class AlluxioMasterRestServiceHandler {
   }
 
   private Map<String, MountPointInfo> getMountPointsInternal() {
-    return mFileSystemMaster.getMountTable();
+    return mFileSystemMaster.getMountPointInfoSummary();
   }
 
   private Map<String, Capacity> getTierCapacityInternal() {
@@ -1059,7 +1169,7 @@ public final class AlluxioMasterRestServiceHandler {
   }
 
   private Capacity getUfsCapacityInternal() {
-    MountPointInfo mountInfo = mFileSystemMaster.getMountTable().get(MountTable.ROOT);
+    MountPointInfo mountInfo = mFileSystemMaster.getMountPointInfoSummary().get(MountTable.ROOT);
     if (mountInfo == null) {
       return new Capacity().setTotal(-1).setUsed(-1);
     }

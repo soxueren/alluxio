@@ -12,12 +12,16 @@
 package alluxio.underfs.wasb;
 
 import alluxio.AlluxioURI;
+import alluxio.Constants;
 import alluxio.conf.PropertyKey;
+import alluxio.underfs.UfsFileStatus;
+import alluxio.underfs.UfsStatus;
 import alluxio.underfs.UnderFileSystem;
 import alluxio.underfs.UnderFileSystemConfiguration;
 import alluxio.underfs.hdfs.HdfsUnderFileSystem;
 import alluxio.underfs.options.FileLocationOptions;
 
+import com.google.common.base.MoreObjects;
 import org.apache.hadoop.conf.Configuration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,12 +38,6 @@ import javax.annotation.concurrent.ThreadSafe;
 @ThreadSafe
 public class WasbUnderFileSystem extends HdfsUnderFileSystem {
   private static final Logger LOG = LoggerFactory.getLogger(WasbUnderFileSystem.class);
-
-  /** Constant for the wasb URI scheme. */
-  public static final String SCHEME_INSECURE = "wasb://";
-
-  /** Constant for the wasbs URI scheme. */
-  public static final String SCHEME_SECURE = "wasbs://";
 
   /**
    * Prepares the configuration for this Wasb as an HDFS configuration.
@@ -77,7 +75,8 @@ public class WasbUnderFileSystem extends HdfsUnderFileSystem {
    */
   public static WasbUnderFileSystem createInstance(AlluxioURI uri,
       UnderFileSystemConfiguration conf) {
-    Configuration wasbConf = createConfiguration(conf, uri.getScheme().startsWith(SCHEME_SECURE));
+    Configuration wasbConf = createConfiguration(conf,
+        uri.getScheme().startsWith(Constants.HEADER_WASBS));
     return new WasbUnderFileSystem(uri, conf, wasbConf);
   }
 
@@ -102,6 +101,22 @@ public class WasbUnderFileSystem extends HdfsUnderFileSystem {
   public long getBlockSizeByte(String path) throws IOException {
     // wasb is an object store, so use the default block size, like other object stores.
     return mUfsConf.getBytes(PropertyKey.USER_BLOCK_SIZE_BYTES_DEFAULT);
+  }
+
+  @Override
+  public UfsStatus getStatus(String path) throws IOException {
+    UfsStatus status = super.getStatus(path);
+    if (status instanceof UfsFileStatus) {
+      // wasb is backed by an object store but always claims its block size to be 512MB.
+      // reset the block size in UfsFileStatus according to getBlockSizeByte
+      return new UfsFileStatus(path,
+          ((UfsFileStatus) status).getContentHash(),
+          ((UfsFileStatus) status).getContentLength(),
+          MoreObjects.firstNonNull(status.getLastModifiedTime(), 0L),
+          status.getOwner(), status.getGroup(), status.getMode(),
+          getBlockSizeByte(path));
+    }
+    return status;
   }
 
   // Not supported

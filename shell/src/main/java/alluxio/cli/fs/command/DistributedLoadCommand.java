@@ -12,34 +12,23 @@
 package alluxio.cli.fs.command;
 
 import alluxio.AlluxioURI;
-import alluxio.ClientContext;
 import alluxio.annotation.PublicApi;
 import alluxio.cli.CommandUtils;
 import alluxio.cli.fs.FileSystemShellUtils;
 import alluxio.client.file.FileSystemContext;
-import alluxio.client.file.URIStatus;
-import alluxio.client.job.JobMasterClient;
 import alluxio.exception.AlluxioException;
 import alluxio.exception.status.InvalidArgumentException;
-import alluxio.job.plan.load.LoadConfig;
 
-import alluxio.job.wire.JobInfo;
-import alluxio.job.wire.Status;
-import alluxio.retry.CountingRetry;
-import alluxio.retry.RetryPolicy;
-import alluxio.worker.job.JobMasterClientContext;
-
-import com.google.common.collect.Lists;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.commons.lang3.StringUtils;
 
+import java.io.BufferedReader;
+import java.io.FileReader;
 import java.io.IOException;
-import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Collectors;
+import java.util.Set;
+import java.util.HashSet;
 
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -48,8 +37,7 @@ import javax.annotation.concurrent.ThreadSafe;
  */
 @ThreadSafe
 @PublicApi
-public final class DistributedLoadCommand extends AbstractFileSystemCommand {
-  private static final Logger LOG = LoggerFactory.getLogger(DistributedLoadCommand.class);
+public final class DistributedLoadCommand extends AbstractDistributedJobCommand {
   private static final int DEFAULT_REPLICATION = 1;
   private static final Option REPLICATION_OPTION =
       Option.builder()
@@ -61,88 +49,64 @@ public final class DistributedLoadCommand extends AbstractFileSystemCommand {
           .argName("replicas")
           .desc("Number of block replicas of each loaded file, default: " + DEFAULT_REPLICATION)
           .build();
-
-  private static final int DEFAULT_ACTIVE_JOBS = 1000;
-
-  private class JobAttempt {
-    private final LoadConfig mJobConfig;
-    private final RetryPolicy mRetryPolicy;
-    private final JobMasterClient mClient;
-
-    private Long mJobId;
-
-    private JobAttempt(LoadConfig jobConfig, RetryPolicy retryPolicy, ClientContext clientContext) {
-      mJobConfig = jobConfig;
-      mRetryPolicy = retryPolicy;
-      mClient = JobMasterClient.Factory.create(
-          JobMasterClientContext.newBuilder(clientContext).build());
-    }
-
-    private boolean run() {
-      if (mRetryPolicy.attempt()) {
-        mJobId = null;
-        try {
-          mJobId = mClient.run(mJobConfig);
-        } catch (IOException e) {
-          LOG.warn("Failed to get status for job (jobId={})", mJobId, e);
-          // Do nothing. This will be counted as a failed attempt
-        }
-        return true;
-      }
-      System.out.println(String.format("Failed to complete loading %s after %d retries.",
-          mJobConfig.getFilePath(), mRetryPolicy.getAttemptCount()));
-      return false;
-    }
-
-    /**
-     * Returns the status of the job attempt.
-     * @return True if finished successfully or cancelled, False if FAILED and should be retried,
-     *              null if the status should be checked again later
-     */
-    private Status check() {
-      if (mJobId == null) {
-        return Status.FAILED;
-      }
-
-      JobInfo jobInfo;
-      try {
-        jobInfo = mClient.getJobStatus(mJobId);
-      } catch (IOException e) {
-        LOG.warn("Failed to get status for job (jobId={})", mJobId, e);
-        return Status.FAILED;
-      }
-
-      // This make an assumption that this job tree only goes 1 level deep
-      boolean finished = true;
-      for (JobInfo child : jobInfo.getChildren()) {
-        if (!child.getStatus().isFinished()) {
-          finished = false;
-          break;
-        }
-      }
-
-      if (finished) {
-        if (jobInfo.getStatus().equals(Status.FAILED)) {
-          System.out.println(String.format("Attempt %d to load %s failed because: %s",
-              mRetryPolicy.getAttemptCount(), mJobConfig.getFilePath(),
-              jobInfo.getErrorMessage()));
-        } else if (jobInfo.getStatus().equals(Status.COMPLETED)) {
-          System.out.println(String.format("Successfully loaded path %s after %d attempts",
-                  mJobConfig.getFilePath(), mRetryPolicy.getAttemptCount()));
-        }
-        return jobInfo.getStatus();
-      }
-      return Status.RUNNING;
-    }
-
-    private void close() throws IOException {
-      // propagate failing to close up to prevent potential memory leak
-      mClient.close();
-    }
-  }
-
-  private List<JobAttempt> mSubmittedJobAttempts;
-  private int mActiveJobs;
+  private static final Option ACTIVE_JOB_COUNT_OPTION =
+      Option.builder()
+          .longOpt("active-jobs")
+          .required(false)
+          .hasArg(true)
+          .numberOfArgs(1)
+          .type(Number.class)
+          .argName("active job count")
+          .desc("Number of active jobs that can run at the same time. Later jobs must wait. "
+              + "The default upper limit is "
+              + AbstractDistributedJobCommand.DEFAULT_ACTIVE_JOBS)
+          .build();
+  private static final Option INDEX_FILE =
+      Option.builder()
+          .longOpt("index")
+          .required(false)
+          .hasArg(true)
+          .numberOfArgs(0)
+          .type(String.class)
+          .argName("index file")
+          .desc("Name of the index file that lists all files to be loaded")
+          .build();
+  private static final Option HOSTS_OPTION =
+      Option.builder()
+          .longOpt("hosts")
+          .required(false)
+          .hasArg(true)
+          .numberOfArgs(1)
+          .argName("hosts")
+          .desc("A list of worker hosts separated by comma")
+          .build();
+  private static final Option HOST_FILE_OPTION =
+      Option.builder()
+          .longOpt("host-file")
+          .required(false)
+          .hasArg(true)
+          .numberOfArgs(1)
+          .argName("host-file")
+          .desc("Host File contains worker hosts, each line has a worker host")
+          .build();
+  private static final Option LOCALITY_OPTION =
+      Option.builder()
+          .longOpt("locality")
+          .required(false)
+          .hasArg(true)
+          .numberOfArgs(1)
+          .argName("locality")
+          .desc("A list of worker locality separated by comma")
+          .build();
+  private static final Option LOCALITY_FILE_OPTION =
+      Option.builder()
+          .longOpt("locality-file")
+          .required(false)
+          .hasArg(true)
+          .numberOfArgs(1)
+          .argName("locality-file")
+          .desc("Locality File contains worker localities, each line has a worker locality")
+          .build();
 
   /**
    * Constructs a new instance to load a file or directory in Alluxio space.
@@ -151,7 +115,6 @@ public final class DistributedLoadCommand extends AbstractFileSystemCommand {
    */
   public DistributedLoadCommand(FileSystemContext fsContext) {
     super(fsContext);
-    mSubmittedJobAttempts = Lists.newArrayList();
   }
 
   @Override
@@ -161,7 +124,10 @@ public final class DistributedLoadCommand extends AbstractFileSystemCommand {
 
   @Override
   public Options getOptions() {
-    return new Options().addOption(REPLICATION_OPTION);
+    return new Options().addOption(REPLICATION_OPTION).addOption(ACTIVE_JOB_COUNT_OPTION)
+        .addOption(INDEX_FILE)
+        .addOption(HOSTS_OPTION)
+        .addOption(HOST_FILE_OPTION);
   }
 
   @Override
@@ -170,129 +136,81 @@ public final class DistributedLoadCommand extends AbstractFileSystemCommand {
   }
 
   @Override
-  public int run(CommandLine cl) throws AlluxioException, IOException {
-    String[] args = cl.getArgs();
-    AlluxioURI path = new AlluxioURI(args[0]);
-    int replication = FileSystemShellUtils.getIntArg(cl, REPLICATION_OPTION, DEFAULT_REPLICATION);
-    mActiveJobs = DEFAULT_ACTIVE_JOBS;
-    distributedLoad(path, replication);
-    return 0;
-  }
-
-  /**
-   * Creates a new job to load a file in Alluxio space, makes it resident in memory.
-   *
-   * @param filePath The {@link AlluxioURI} path to load into Alluxio memory
-   * @param replication The replication of file to load into Alluxio memory
-   */
-  private JobAttempt newJob(AlluxioURI filePath, int replication) {
-    JobAttempt jobAttempt = new JobAttempt(new LoadConfig(filePath.getPath(), replication),
-        new CountingRetry(3), ClientContext.create(mFsContext.getPathConf(filePath)));
-
-    jobAttempt.run();
-
-    return jobAttempt;
-  }
-
-  /**
-   * Waits for at least one job to complete.
-   */
-  private void waitJob() {
-    AtomicBoolean removed = new AtomicBoolean(false);
-    while (true) {
-      mSubmittedJobAttempts = mSubmittedJobAttempts.parallelStream().filter((jobAttempt) -> {
-        Status check = jobAttempt.check();
-        switch (check) {
-          case CREATED:
-          case RUNNING:
-            return true;
-          case CANCELED:
-          case COMPLETED:
-            removed.set(true);
-            try {
-              jobAttempt.close();
-            } catch (IOException e) {
-              LOG.warn("Unable to close job master client", e);
-            }
-            return false;
-          case FAILED:
-            removed.set(true);
-            return false;
-          default:
-            throw new IllegalStateException(String.format("Unexpected Status: %s", check));
-        }
-      }).collect(Collectors.toList());
-      if (removed.get()) {
-        return;
-      }
-    }
-  }
-
-  /**
-   * Add one job.
-   */
-  private void addJob(URIStatus status, int replication) throws IOException {
-    AlluxioURI filePath = new AlluxioURI(status.getPath());
-    if (status.getInAlluxioPercentage() == 100) {
-      // The file has already been fully loaded into Alluxio.
-      System.out.println(filePath + " is already fully loaded in Alluxio");
-      return;
-    }
-    if (mSubmittedJobAttempts.size() >= mActiveJobs) {
-      // Wait one job to complete.
-      waitJob();
-    }
-    mSubmittedJobAttempts.add(newJob(filePath, replication));
-    System.out.println(filePath + " loading");
-  }
-
-  /**
-   * Distributed loads a file or directory in Alluxio space, makes it resident in memory.
-   *
-   * @param filePath The {@link AlluxioURI} path to load into Alluxio memory
-   * @param replication The replication of file to load into Alluxio memory
-   */
-  private void distributedLoad(AlluxioURI filePath, int replication)
-      throws AlluxioException, IOException {
-    load(filePath, replication);
-    // Wait remaining jobs to complete.
-    while (!mSubmittedJobAttempts.isEmpty()) {
-      waitJob();
-    }
-  }
-
-  /**
-   * Loads a file or directory in Alluxio space, makes it resident in memory.
-   *
-   * @param filePath The {@link AlluxioURI} path to load into Alluxio memory
-   * @throws AlluxioException when Alluxio exception occurs
-   * @throws IOException      when non-Alluxio exception occurs
-   */
-  private void load(AlluxioURI filePath, int replication)
-      throws IOException, AlluxioException {
-    URIStatus status = mFileSystem.getStatus(filePath);
-    if (status.isFolder()) {
-      List<URIStatus> statuses = mFileSystem.listStatus(filePath);
-      for (URIStatus uriStatus : statuses) {
-        if (uriStatus.isFolder()) {
-          AlluxioURI subPath = new AlluxioURI(uriStatus.getPath());
-          load(subPath, replication);
-        } else {
-          addJob(uriStatus, replication);
-        }
-      }
-    } else {
-      addJob(status, replication);
-    }
-  }
-
-  @Override
   public String getUsage() {
-    return "distributedLoad [--replication <num>] <path>";
+    return "distributedLoad [--replication <num>] [--active-jobs <num>] [--index] "
+        + "[--hosts <host1,host2,...,hostN>] [--host-file <hostFilePath>] "
+        + "[--locality <locality1,locality2,...,localityN>] [--locality-file <localityFilePath>] "
+        + "<path>";
   }
 
   @Override
   public String getDescription() {
     return "Loads a file or all files in a directory into Alluxio space.";
+  }
+
+  @Override
+  public int run(CommandLine cl) throws AlluxioException, IOException {
+    mActiveJobs = FileSystemShellUtils.getIntArg(cl, ACTIVE_JOB_COUNT_OPTION,
+        AbstractDistributedJobCommand.DEFAULT_ACTIVE_JOBS);
+    System.out.format("Allow up to %s active jobs%n", mActiveJobs);
+
+    String[] args = cl.getArgs();
+    int replication = FileSystemShellUtils.getIntArg(cl, REPLICATION_OPTION, DEFAULT_REPLICATION);
+    Set<String> workerSet = new HashSet<>();
+    Set<String> localityIds = new HashSet<>();
+    if (cl.hasOption(HOST_FILE_OPTION.getLongOpt())) {
+      String hostFile = cl.getOptionValue(HOST_FILE_OPTION.getLongOpt()).trim();
+      readLinesToSet(workerSet, hostFile);
+    } else if (cl.hasOption(HOSTS_OPTION.getLongOpt())) {
+      String argOption = cl.getOptionValue(HOSTS_OPTION.getLongOpt()).trim();
+      readItemsFromOptionString(workerSet, argOption);
+    }
+    if (cl.hasOption(LOCALITY_FILE_OPTION.getLongOpt())) {
+      String localityFile = cl.getOptionValue(LOCALITY_FILE_OPTION.getLongOpt()).trim();
+      readLinesToSet(localityIds, localityFile);
+    } else if (cl.hasOption(LOCALITY_OPTION.getLongOpt())) {
+      String argOption = cl.getOptionValue(LOCALITY_OPTION.getLongOpt()).trim();
+      readItemsFromOptionString(localityIds, argOption);
+    }
+
+    if (!cl.hasOption(INDEX_FILE.getLongOpt())) {
+      AlluxioURI path = new AlluxioURI(args[0]);
+      DistributedLoadUtils.distributedLoad(this, path, replication, workerSet, localityIds);
+    } else {
+      try (BufferedReader reader = new BufferedReader(new FileReader(args[0]))) {
+        for (String filename; (filename = reader.readLine()) != null; ) {
+          AlluxioURI path = new AlluxioURI(filename);
+          DistributedLoadUtils.distributedLoad(this, path, replication, workerSet, localityIds);
+        }
+      }
+    }
+    return 0;
+  }
+
+  private void readItemsFromOptionString(Set<String> localityIds,
+      String argOption) {
+    for (String locality : StringUtils.split(argOption, ",")) {
+      locality = locality.trim().toUpperCase();
+      if (!locality.isEmpty()) {
+        localityIds.add(locality);
+      }
+    }
+  }
+
+  private void readLinesToSet(Set<String> workerSet, String hostFile)
+      throws IOException {
+    try (BufferedReader reader = new BufferedReader(new FileReader(hostFile))) {
+      for (String worker; (worker = reader.readLine()) != null; ) {
+        worker = worker.trim().toUpperCase();
+        if (!worker.isEmpty()) {
+          workerSet.add(worker);
+        }
+      }
+    }
+  }
+
+  @Override
+  public void close() throws IOException {
+    mClient.close();
   }
 }

@@ -26,7 +26,7 @@ import (
 
 const (
 	// The version of the hadoop client that the Alluxio client will be built for
-	defaultHadoopClient = "hadoop-2.7"
+	defaultHadoopClient = "hadoop-3.3"
 )
 
 var (
@@ -48,11 +48,45 @@ func Single(args []string) error {
 	additionalFlags(singleCmd)
 	singleCmd.Parse(args[2:]) // error handling by flag.ExitOnError
 
+	if customUfsModuleFlag != "" {
+		customUfsModules := strings.Split(customUfsModuleFlag, "%")
+		for _, customUfsModule := range customUfsModules {
+			customUfsModuleFlagArray := strings.Split(customUfsModule, "|")
+			if len(customUfsModuleFlagArray) == 2 {
+				customUfsModuleFlagArray[1] = strings.ReplaceAll(customUfsModuleFlagArray[1], ",", " ")
+				ufsModules["ufs-"+customUfsModuleFlagArray[0]] = module{customUfsModuleFlagArray[0], true, customUfsModuleFlagArray[1]}
+			} else {
+				fmt.Fprintf(os.Stderr, "customUfsModuleFlag specified, but invalid: %s\n", customUfsModuleFlag)
+				os.Exit(1)
+			}
+		}
+	}
 	if err := updateRootFlags(); err != nil {
 		return err
 	}
 	if err := checkRootFlags(); err != nil {
 		return err
+	}
+	if includedLibJarsFlag != "all" {
+		uncheckedJars := strings.Split(includedLibJarsFlag, ",")
+		for _, jar := range uncheckedJars {
+			_, ok := libJars[jar]
+			if !ok {
+				return fmt.Errorf("lib jar %v not recognized", jar)
+			}
+		}
+	}
+	if debugFlag {
+		fmt.Fprintf(os.Stdout, "hadoopDistributionFlag=: %s\n", hadoopDistributionFlag)
+		fmt.Fprintf(os.Stdout, "customUfsModuleFlag=: %s\n", customUfsModuleFlag)
+		fmt.Fprintf(os.Stdout, "includedLibJarsFlag=: %s\n", includedLibJarsFlag)
+		fmt.Fprintf(os.Stdout, "mvnArgsFlag=: %s\n", mvnArgsFlag)
+		fmt.Fprintf(os.Stdout, "targetFlag=: %s\n", targetFlag)
+		fmt.Fprintf(os.Stdout, "ufs-modules=: %s\n", ufsModulesFlag)
+
+		for _, ufsModule := range ufsModules {
+			fmt.Fprintf(os.Stdout, "ufsModule=: %s\n", ufsModule)
+		}
 	}
 	if err := generateTarball([]string{}, skipUIFlag, skipHelmFlag); err != nil {
 		return err
@@ -96,7 +130,7 @@ func chdir(path string) {
 }
 
 func getCommonMvnArgs(hadoopVersion version) []string {
-	args := []string{"-T", "2C", "-am", "clean", "install", "-DskipTests", "-Dfindbugs.skip", "-Dmaven.javadoc.skip", "-Dcheckstyle.skip", "-Pmesos", "-Pno-webui-linter"}
+	args := []string{"-T", "1", "-am", "clean", "install", "-DskipTests", "-Dfindbugs.skip", "-Dmaven.javadoc.skip", "-Dcheckstyle.skip", "-Pno-webui-linter", "-Prelease"}
 	if mvnArgsFlag != "" {
 		for _, arg := range strings.Split(mvnArgsFlag, ",") {
 			args = append(args, arg)
@@ -107,15 +141,11 @@ func getCommonMvnArgs(hadoopVersion version) []string {
 	if includeYarnIntegration(hadoopVersion) {
 		args = append(args, "-Pyarn")
 	}
-	if hadoopVersion.major == 1 {
-		// checker requires hadoop 2+ to compile.
-		args = append(args, "-Dchecker.hadoop.version=2.2.0")
-	}
 	return args
 }
 
 func includeYarnIntegration(hadoopVersion version) bool {
-	return hadoopVersion.major >= 2 && hadoopVersion.minor >= 4
+	return hadoopVersion.compare(2, 4, 0) >= 0
 }
 
 func getVersion() (string, error) {
@@ -149,7 +179,7 @@ func buildModules(srcPath, name, ufsType, moduleFlag, version string, modules ma
 		for _, arg := range strings.Split(moduleEntry.mavenArgs, " ") {
 			moduleMvnArgs = append(moduleMvnArgs, arg)
 		}
-		var versionMvnArg = "2.7.3"
+		var versionMvnArg = "3.3.0"
 		for _, arg := range moduleMvnArgs {
 			if strings.Contains(arg, "ufs.hadoop.version") {
 				versionMvnArg = strings.Split(arg, "=")[1]
@@ -187,35 +217,33 @@ func addAdditionalFiles(srcPath, dstPath string, hadoopVersion version, version 
 		"conf/masters",
 		"conf/metrics.properties.template",
 		"conf/workers",
-		"integration/checker/bin/alluxio-checker.sh",
-		"integration/checker/bin/hive-checker.sh",
-		"integration/checker/bin/mapreduce-checker.sh",
-		"integration/checker/bin/spark-checker.sh",
+		"integration/docker/.dockerignore",
+		"integration/docker/conf/alluxio-env.sh.template",
+		"integration/docker/conf/alluxio-site.properties.template",
 		"integration/docker/Dockerfile",
 		"integration/docker/Dockerfile.fuse",
 		"integration/docker/entrypoint.sh",
-		"integration/docker/conf/alluxio-site.properties.template",
-		"integration/docker/conf/alluxio-env.sh.template",
 		"integration/fuse/bin/alluxio-fuse",
-		"integration/mesos/bin/alluxio-env-mesos.sh",
-		"integration/mesos/bin/alluxio-mesos-start.sh",
-		"integration/mesos/bin/alluxio-master-mesos.sh",
-		"integration/mesos/bin/alluxio-mesos-stop.sh",
-		"integration/mesos/bin/alluxio-worker-mesos.sh",
-		"integration/mesos/bin/common.sh",
-		fmt.Sprintf("lib/alluxio-underfs-cos-%v.jar", version),
-		fmt.Sprintf("lib/alluxio-underfs-gcs-%v.jar", version),
-		fmt.Sprintf("lib/alluxio-underfs-local-%v.jar", version),
-		fmt.Sprintf("lib/alluxio-underfs-oss-%v.jar", version),
-		fmt.Sprintf("lib/alluxio-underfs-s3a-%v.jar", version),
-		fmt.Sprintf("lib/alluxio-underfs-swift-%v.jar", version),
-		fmt.Sprintf("lib/alluxio-underfs-wasb-%v.jar", version),
-		fmt.Sprintf("lib/alluxio-underfs-web-%v.jar", version),
-		fmt.Sprintf("lib/alluxio-table-server-underdb-glue-%v.jar", version),
-		fmt.Sprintf("lib/alluxio-table-server-underdb-hive-%v.jar", version),
+		"integration/metrics/docker-compose-master.yaml",
+		"integration/metrics/docker-compose-worker.yaml",
+		"integration/metrics/otel-agent-config.yaml",
+		"integration/metrics/otel-agent-config-worker.yaml",
+		"integration/metrics/otel-collector-config.yaml",
+		"integration/metrics/prometheus.yaml",
 		"libexec/alluxio-config.sh",
 		"LICENSE",
 	}
+
+	if includedLibJarsFlag == "all" {
+		for jar := range libJars {
+			pathsToCopy = append(pathsToCopy, fmt.Sprintf("lib/alluxio-%v-%v.jar", jar, version))
+		}
+	} else {
+		for _, jar := range strings.Split(includedLibJarsFlag, ",") {
+			pathsToCopy = append(pathsToCopy, fmt.Sprintf("lib/alluxio-%v-%v.jar", jar, version))
+		}
+	}
+
 	if includeYarnIntegration(hadoopVersion) {
 		pathsToCopy = append(pathsToCopy, []string{
 			"integration/yarn/bin/alluxio-application-master.sh",
@@ -242,7 +270,8 @@ func addAdditionalFiles(srcPath, dstPath string, hadoopVersion version, version 
 func generateTarball(hadoopClients []string, skipUI bool, skipHelm bool) error {
 	hadoopVersion, ok := hadoopDistributions[hadoopDistributionFlag]
 	if !ok {
-		return fmt.Errorf("hadoop distribution %s not recognized\n", hadoopDistributionFlag)
+		hadoopVersion = parseVersion(hadoopDistributionFlag)
+		fmt.Printf("hadoop distribution %s not recognized, change to %s\n", hadoopDistributionFlag, hadoopVersion)
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -277,10 +306,6 @@ func generateTarball(hadoopClients []string, skipUI bool, skipHelm bool) error {
 	replace("libexec/alluxio-config.sh", "assembly/server/target/alluxio-assembly-server-${VERSION}-jar-with-dependencies.jar", "assembly/alluxio-server-${VERSION}.jar")
 	// Update the FUSE jar path
 	replace("integration/fuse/bin/alluxio-fuse", "target/alluxio-integration-fuse-${VERSION}-jar-with-dependencies.jar", "alluxio-fuse-${VERSION}.jar")
-	// Update the checker jar paths
-	for _, file := range []string{"bin/hive-checker.sh", "bin/mapreduce-checker.sh", "bin/spark-checker.sh"} {
-		replace(filepath.Join("integration/checker", file), "target/alluxio-checker-${VERSION}-jar-with-dependencies.jar", "alluxio-checker-${VERSION}.jar")
-	}
 
 	mvnArgs := getCommonMvnArgs(hadoopVersion)
 	if skipUI {
@@ -309,7 +334,7 @@ func generateTarball(hadoopClients []string, skipUI bool, skipHelm bool) error {
 	fmt.Printf("Creating %s:\n", tarball)
 
 	for _, dir := range []string{
-		"assembly", "client", "logs", "integration/fuse", "integration/checker", "integration/kubernetes", "logs/user",
+		"assembly", "client", "logs", "integration/fuse", "integration/kubernetes", "logs/user",
 	} {
 		mkdir(filepath.Join(dstPath, dir))
 	}
@@ -321,7 +346,6 @@ func generateTarball(hadoopClients []string, skipUI bool, skipHelm bool) error {
 	run("adding Alluxio client assembly jar", "mv", fmt.Sprintf("assembly/client/target/alluxio-assembly-client-%v-jar-with-dependencies.jar", version), filepath.Join(dstPath, "assembly", fmt.Sprintf("alluxio-client-%v.jar", version)))
 	run("adding Alluxio server assembly jar", "mv", fmt.Sprintf("assembly/server/target/alluxio-assembly-server-%v-jar-with-dependencies.jar", version), filepath.Join(dstPath, "assembly", fmt.Sprintf("alluxio-server-%v.jar", version)))
 	run("adding Alluxio FUSE jar", "mv", fmt.Sprintf("integration/fuse/target/alluxio-integration-fuse-%v-jar-with-dependencies.jar", version), filepath.Join(dstPath, "integration", "fuse", fmt.Sprintf("alluxio-fuse-%v.jar", version)))
-	run("adding Alluxio checker jar", "mv", fmt.Sprintf("integration/checker/target/alluxio-checker-%v-jar-with-dependencies.jar", version), filepath.Join(dstPath, "integration", "checker", fmt.Sprintf("alluxio-checker-%v.jar", version)))
 
 	// Generate Helm templates in the dstPath
 	run("adding Helm chart", "cp", "-r", filepath.Join(srcPath, "integration/kubernetes/helm-chart"), filepath.Join(dstPath, "integration/kubernetes/helm-chart"))

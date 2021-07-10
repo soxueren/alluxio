@@ -13,6 +13,7 @@ package alluxio.underfs;
 
 import alluxio.AlluxioURI;
 import alluxio.conf.AlluxioConfiguration;
+import alluxio.conf.InstancedConfiguration;
 import alluxio.conf.PropertyKey;
 import alluxio.annotation.PublicApi;
 import alluxio.SyncInfo;
@@ -57,7 +58,6 @@ import javax.annotation.concurrent.ThreadSafe;
 @ThreadSafe
 // TODO(adit); API calls should use a URI instead of a String wherever appropriate
 public interface UnderFileSystem extends Closeable {
-
   /**
    * The factory for the {@link UnderFileSystem}.
    */
@@ -108,7 +108,7 @@ public interface UnderFileSystem extends Closeable {
         } catch (Throwable e) {
           // Catching Throwable rather than Exception to catch service loading errors
           errors.add(e);
-          LOG.warn("Failed to create UnderFileSystem by factory {}: {}", factory, e.getMessage());
+          LOG.warn("Failed to create UnderFileSystem by factory {}: {}", factory, e.toString());
         } finally {
           Thread.currentThread().setContextClassLoader(previousClassLoader);
         }
@@ -337,6 +337,15 @@ public interface UnderFileSystem extends Closeable {
    */
   @Deprecated
   long getBlockSizeByte(String path) throws IOException;
+
+  /**
+   * Gets the under file system configuration.
+   *
+   * @return the configuration
+   */
+  default AlluxioConfiguration getConfiguration() throws IOException {
+    return InstancedConfiguration.EMPTY_CONFIGURATION;
+  }
 
   /**
    * Gets the directory status. The caller must already know the path is a directory. This method
@@ -595,7 +604,7 @@ public interface UnderFileSystem extends Closeable {
   /**
    * Opens an {@link InputStream} for a file in under filesystem at the indicated path.
    *
-   * Similar to {@link #open(fString)} but
+   * Similar to {@link #open(String)} but
    * deals with the write-then-read eventual consistency issue.
    *
    * @param path the file name
